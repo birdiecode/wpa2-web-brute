@@ -81,6 +81,8 @@ def calc_ptk(key, data):
 
 #  генерация Pairwise Transport Key
 key_data = min(bssid, sta) + max(bssid, sta) + min(anonce, snonce) + max(anonce, snonce)
+print("Key Data format JS: ["+', '.join(f'0x{b:02X}' for b in key_data)+"]")
+
 ptk = calc_ptk(pmk, key_data)
 print("Pairwise Transport Key: " + ptk.hex())
 
