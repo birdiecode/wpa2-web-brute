@@ -13,6 +13,8 @@ ssid = None
 sta = None
 anonce = None
 snonce = None
+wpadata = None
+reference_mic = None
 
 #  it is fix methode in EAPOL_KEY.guess_key_number in scapy==2.6.1
 def guess_key_number(pckt):
@@ -44,8 +46,9 @@ for packet in packets:
 
             elif message_n == 2: #  Key Information: 0x010a
                 snonce = p.key_nonce
+                reference_mic = p.key_mic.hex()
                 print("sNonce: " + snonce.hex())
-                print("mic: " + p.key_mic.hex())
+                print("mic: " + reference_mic)
                 #  802.1X Authentication
                 wpadata = bytearray(bytes(packet[EAPOL]))
                 wpadata[81:97] = b'\x00' * 16 #  удаляем из EAPOL код целостности mic
@@ -80,3 +83,12 @@ def calc_ptk(key, data):
 key_data = min(bssid, sta) + max(bssid, sta) + min(anonce, snonce) + max(anonce, snonce)
 ptk = calc_ptk(pmk, key_data)
 print("Pairwise Transport Key: " + ptk.hex())
+
+#  генерация Message Integrity Code
+mic = hmac.new(ptk[0:16], wpadata, "sha1")
+print("Generated MIC: " + mic.hexdigest()[:-8])
+
+if mic.hexdigest()[:-8] == reference_mic:
+    print('\nMIC matched')
+else:
+    print('\nMIC didn`t match')
