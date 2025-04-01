@@ -6,9 +6,13 @@ from scapy.layers.eap import EAPOL_KEY, EAPOL
 from scapy.utils import rdpcap
 
 packets = rdpcap("data/capture-01.cap")
-bssid = "66:4b:93:37:28:0f"
+bssid_find = "66:4b:93:37:28:0f"
 
+bssid=None
 ssid = None
+sta = None
+anonce = None
+snonce = None
 
 #  it is fix methode in EAPOL_KEY.guess_key_number in scapy==2.6.1
 def guess_key_number(pckt):
@@ -25,18 +29,22 @@ def guess_key_number(pckt):
     return 0
 
 for packet in packets:
-    if bssid.lower() in [packet.addr1, packet.addr2, packet.addr3]:
+    if bssid_find.lower() in [packet.addr1, packet.addr2, packet.addr3]:
         if packet.haslayer(EAPOL_KEY):
             p = packet[EAPOL_KEY]
             message_n = guess_key_number(p)
 
             if message_n == 1: #  Key Information: 0x008a
-                print("bssid: "+packet.addr2)
-                print("sta: "+packet.addr1)
-                print("aNonce: " + p.key_nonce.hex())
+                bssid = bytes.fromhex(packet.addr2.replace(":", ""))
+                sta = bytes.fromhex(packet.addr1.replace(":", ""))
+                anonce = p.key_nonce
+                print("bssid: "+bssid.hex())
+                print("sta: "+sta.hex())
+                print("aNonce: " + anonce.hex())
 
             elif message_n == 2: #  Key Information: 0x010a
-                print("sNonce: " + p.key_nonce.hex())
+                snonce = p.key_nonce
+                print("sNonce: " + snonce.hex())
                 print("mic: " + p.key_mic.hex())
                 #  802.1X Authentication
                 wpadata = bytearray(bytes(packet[EAPOL]))
@@ -53,6 +61,22 @@ test_password = input("\nTest password: ")
 
 #  генерация Pairwise Master Key
 pmk = hashlib.pbkdf2_hmac('sha1', test_password.encode('utf-8'), ssid, 4096, 32)
-
 print("Pairwise Master Key: " + pmk.hex())
 
+#  генератор Pairwise Transport Key
+def calc_ptk(key, data):
+    blen = 64
+    i = 0
+    ret = b""
+
+    while i<=((blen*8+159) /160):
+        hmacsha1 = hmac.new(key, b'Pairwise key expansion\x00' + data + chr(i).encode(), hashlib.sha1)
+        i += 1
+        ret = ret + hmacsha1.digest()
+
+    return ret[:blen]
+
+#  генерация Pairwise Transport Key
+key_data = min(bssid, sta) + max(bssid, sta) + min(anonce, snonce) + max(anonce, snonce)
+ptk = calc_ptk(pmk, key_data)
+print("Pairwise Transport Key: " + ptk.hex())
