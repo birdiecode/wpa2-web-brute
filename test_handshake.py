@@ -2,7 +2,7 @@ import hashlib
 import hmac
 
 from scapy.layers.dot11 import Dot11Beacon
-from scapy.layers.eap import EAPOL_KEY
+from scapy.layers.eap import EAPOL_KEY, EAPOL
 from scapy.utils import rdpcap
 
 packets = rdpcap("data/capture-01.cap")
@@ -39,8 +39,8 @@ for packet in packets:
                 print("sNonce: " + p.key_nonce.hex())
                 print("mic: " + p.key_mic.hex())
                 #  802.1X Authentication
-                wpadata = bytearray(bytes(p))
-                wpadata[76:93] = b'\x00' * 16 #  удаляем из EAPOL код целостности mic
+                wpadata = bytearray(bytes(packet[EAPOL]))
+                wpadata[81:97] = b'\x00' * 16 #  удаляем из EAPOL код целостности mic
                 print("wpaData: " + wpadata.hex())
 
         elif packet.haslayer(Dot11Beacon):
