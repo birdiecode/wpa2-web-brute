@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+
 from scapy.layers.dot11 import Dot11Beacon
 from scapy.layers.eap import EAPOL_KEY
 from scapy.utils import rdpcap
@@ -5,7 +8,9 @@ from scapy.utils import rdpcap
 packets = rdpcap("data/capture-01.cap")
 bssid = "66:4b:93:37:28:0f"
 
-# it is fix methode in EAPOL_KEY.guess_key_number in scapy==2.6.1
+ssid = None
+
+#  it is fix methode in EAPOL_KEY.guess_key_number in scapy==2.6.1
 def guess_key_number(pckt):
     if pckt.key_type == 1:
         if pckt.key_ack == 1:
@@ -35,8 +40,19 @@ for packet in packets:
                 print("mic: " + p.key_mic.hex())
                 #  802.1X Authentication
                 wpadata = bytearray(bytes(p))
-                wpadata[76:93] = b'\x00' * 16 # удаляем из EAPOL код целостности mic
+                wpadata[76:93] = b'\x00' * 16 #  удаляем из EAPOL код целостности mic
                 print("wpaData: " + wpadata.hex())
 
         elif packet.haslayer(Dot11Beacon):
-            print("ssid: " + packet[Dot11Beacon].info.decode("utf-8"))
+            ssid = packet[Dot11Beacon].info
+            print("ssid: " + ssid.decode("utf-8"))
+
+
+
+test_password = input("\nTest password: ")
+
+#  генерация Pairwise Master Key
+pmk = hashlib.pbkdf2_hmac('sha1', test_password.encode('utf-8'), ssid, 4096, 32)
+
+print("Pairwise Master Key: " + pmk.hex())
+
