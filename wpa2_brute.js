@@ -81,30 +81,61 @@ function gen_pwd(index, lenpwd, chrary) {
     return res.join("");
 }
 
+async function fetchJson(url, method = 'GET', body = null) {
+    try {
+        const options = {
+            method,
+            headers: { 'Content-Type': 'application/json' }
+        };
+        if (body) {
+            options.body = JSON.stringify(body);
+        }
 
-
-
-const ssid = "Test_WiFi";
-const key_data = new Uint8Array([0x60, 0xF6, 0x77, 0x00, 0xA9, 0xBA, 0x66, 0x4B, 0x93, 0x37, 0x28, 0x0F, 0xA6, 0x4A, 0xD5, 0x33, 0xD8, 0x74, 0x95, 0xC1, 0x16, 0x34, 0xC0, 0x1F, 0x4E, 0x37, 0xD8, 0x7B, 0x0D, 0x54, 0x14, 0x38, 0x2B, 0xB4, 0x79, 0x1F, 0x51, 0xE3, 0x15, 0xA7, 0x8C, 0x98, 0xB8, 0x7C, 0xEA, 0x03, 0xD0, 0x25, 0x93, 0x58, 0x63, 0xDF, 0xCC, 0x4A, 0x06, 0xA7, 0x62, 0x10, 0xFC, 0x5F, 0x53, 0x81, 0xF0, 0x51, 0x29, 0x3B, 0x27, 0x67, 0x83, 0x52, 0xE1, 0x67, 0xF7, 0x20, 0xF9, 0x9E]);
-const wpa2_data = new Uint8Array([0x01, 0x03, 0x00, 0x75, 0x02, 0x01, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xEA, 0x03, 0xD0, 0x25, 0x93, 0x58, 0x63, 0xDF, 0xCC, 0x4A, 0x06, 0xA7, 0x62, 0x10, 0xFC, 0x5F, 0x53, 0x81, 0xF0, 0x51, 0x29, 0x3B, 0x27, 0x67, 0x83, 0x52, 0xE1, 0x67, 0xF7, 0x20, 0xF9, 0x9E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x30, 0x14, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04, 0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02, 0x80, 0x00]);
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error("Ошибка при получении данных:", error);
+        return null;
+    }
+}
 
 (async () => {
-    const pwd = gen_pwd(1301987173672, 8, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
-    console.log("PWD: "+pwd);
-    const pmk = await calc_pmk(pwd, ssid);
-    console.log("PMK: " + Array.from(pmk)
-        .map(b => b.toString(16).padStart(2, "0"))
-        .join(""));
+    var data = await fetchJson('http://127.0.0.1:8000/task');
+    var ret_hash = [];
+    const key_data = new Uint8Array(data.key_data);
+    const wpa2_data = new Uint8Array(data.wpa2_data);
+    for(var pwd_int = data.start;  pwd_int <= data.start+data.col; pwd_int++){
+        var pwd = gen_pwd(pwd_int, 8, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+        console.log("PWD: "+pwd);
 
-    const ptk = await calc_ptk(pmk, key_data);
-    console.log("PTK: " + Array.from(ptk)
-        .map(b => b.toString(16).padStart(2, "0"))
-        .join(""));
+        var pmk = await calc_pmk(pwd, data.ssid);
+        console.log("PMK: " + Array.from(pmk)
+            .map(b => b.toString(16).padStart(2, "0"))
+            .join(""));
 
-    const mic = await calc_mic(ptk.slice(0, 16), wpa2_data);
-    console.log("MIC: " + Array.from(mic)
-        .map(b => b.toString(16).padStart(2, "0"))
-        .join(""));
+        var ptk = await calc_ptk(pmk, key_data);
+        console.log("PTK: " + Array.from(ptk)
+            .map(b => b.toString(16).padStart(2, "0"))
+            .join(""));
+
+        var mic_gen = await calc_mic(ptk.slice(0, 16), wpa2_data);
+
+        var mic_hex = Array.from(mic_gen).map(b => b.toString(16).padStart(2, "0")).join("");
+        ret_hash.push(mic_hex);
+        if(mic_hex===data.mic){
+            fetchJson('http://127.0.0.1:8000/ret', 'POST', { key: data.start, data: pwd});
+        }
+        console.log("MIC: " + mic_hex);
+    }
+
+    var data2 = await fetchJson('http://127.0.0.1:8000/ret', 'POST', { key: data.start, data: "not find"});
+    console.log(data2);
+
+
 
 })();
 
