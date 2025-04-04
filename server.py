@@ -36,22 +36,23 @@ task_size = 1000
 
 
 @app.get("/task")
-def read_root():
+def get_task():
     task = tree.get_task(task_size)
     print(task)
     return {"start": task.begin, "col": task_size, "ssid": ssid, "key_data": key_data, "wpa2_data": wpa2_data, "mic": mic}
 
 @app.get("/info")
-def read_info():
+def get_info():
+    ret = []
     for interval in sorted(tree):
-        print(interval)
-    return {"test": "test"}
+        ret.append({ "begin": interval.begin, "end": interval.end, "status": interval.data })
+    return ret
 
 @app.post("/ret")
-async def receive_data(request: Request):
+async def return_result(request: Request):
     data = await request.json()
     print(data)
-    tree.add_interval(data['key'], data['key']+task_size-1, "parsed")
+    tree.add_interval(data['key'], data['key']+task_size, "parsed")
     if data['data'] != "not find":
         print("FIND KEY: " + str(data['data']))
     return {"status": "ok"}
