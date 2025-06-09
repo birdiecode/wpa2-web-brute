@@ -9,13 +9,16 @@ import string
 import uvicorn
 from fastapi import FastAPI, Request
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, HTMLResponse
 
 from intervalmanager import SuperIntervalTree
 
 app = FastAPI()
 tree = SuperIntervalTree()
 tree.set_task(string.ascii_uppercase+string.digits, 8)
+
+# Глобальная переменная для хранения найденного ключа
+found_key = None
 
 #  для тестов написал скип части интервала
 tree.add_interval(0, 1301987170000, "parsed")
@@ -34,9 +37,15 @@ wpa2_data = [0x01, 0x03, 0x00, 0x75, 0x02, 0x01, 0x0A, 0x00, 0x00, 0x00, 0x00, 0
 mic = "be683259f3eb3f5b2c097f8cf5cc3df9"
 task_size = 1000
 
+@app.get("/")
+async def get_index():
+    return FileResponse("index.html", media_type="text/html")
 
 @app.get("/task")
 def get_task():
+    global found_key
+    if found_key is not None:
+        return {"status": "key_found", "key": found_key}
     task = tree.get_task(task_size)
     print(task)
     return {"start": task.begin, "col": task_size, "ssid": ssid, "key_data": key_data, "wpa2_data": wpa2_data, "mic": mic}
@@ -46,15 +55,17 @@ def get_info():
     ret = []
     for interval in sorted(tree):
         ret.append({ "begin": interval.begin, "end": interval.end, "status": interval.data })
-    return ret
+    return {"intervals": ret, "found_key": found_key}
 
 @app.post("/ret")
 async def return_result(request: Request):
+    global found_key
     data = await request.json()
     print(data)
     tree.add_interval(data['key'], data['key']+task_size, "parsed")
     if data['data'] != "not find":
-        print("FIND KEY: " + str(data['data']))
+        found_key = str(data['data'])
+        print("FIND KEY: " + found_key)
     return {"status": "ok"}
 
 @app.get("/script.js")
@@ -62,4 +73,4 @@ async def get_js():
     return FileResponse("wpa2_brute.js", media_type="application/javascript")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8002)

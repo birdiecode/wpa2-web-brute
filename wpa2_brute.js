@@ -81,6 +81,23 @@ function gen_pwd(index, lenpwd, chrary) {
     return res.join("");
 }
 
+function addLogEntry(message, type = 'info') {
+    const logContainer = document.getElementById('logContainer');
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${type}`;
+    entry.textContent = message;
+    logContainer.appendChild(entry);
+    logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+function updateProgress(processed, total, currentPassword, speed) {
+    const progress = (processed / total) * 100;
+    document.getElementById('progressBar').style.width = `${progress}%`;
+    document.getElementById('processedCount').textContent = processed;
+    document.getElementById('currentPassword').textContent = currentPassword;
+    document.getElementById('speed').textContent = speed.toFixed(2);
+}
+
 async function fetchJson(url, method = 'GET', body = null) {
     try {
         const options = {
@@ -98,45 +115,69 @@ async function fetchJson(url, method = 'GET', body = null) {
         const data = await response.json();
         return data;
     } catch (error) {
-        console.error("Ошибка при получении данных:", error);
+        addLogEntry(`Ошибка при получении данных: ${error}`, 'error');
         return null;
     }
 }
 
 (async () => {
-    var data = await fetchJson('http://127.0.0.1:8000/task');
+    let startTime = Date.now();
+    let processedCount = 0;
+    
+    addLogEntry('Получение задачи от сервера...');
+    var data = await fetchJson('http://127.0.0.1:8002/task');
+    if (!data) {
+        addLogEntry('Не удалось получить задачу от сервера', 'error');
+        return;
+    }
+
+    // Проверяем, не найден ли уже ключ
+    if (data.status === 'key_found') {
+        addLogEntry(`Ключ уже найден: ${data.key}`, 'success');
+        return;
+    }
+    
+    addLogEntry(`Получена задача: начало=${data.start}, размер=${data.col}`);
     var ret_hash = [];
     const key_data = new Uint8Array(data.key_data);
     const wpa2_data = new Uint8Array(data.wpa2_data);
-    for(var pwd_int = data.start;  pwd_int <= data.start+data.col; pwd_int++){
+    
+    for(var pwd_int = data.start; pwd_int <= data.start+data.col; pwd_int++) {
         var pwd = gen_pwd(pwd_int, 8, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
-        console.log("PWD: "+pwd);
+        
+        processedCount++;
+        const currentTime = Date.now();
+        const elapsedTime = (currentTime - startTime) / 1000;
+        const speed = processedCount / elapsedTime;
+        
+        updateProgress(
+            processedCount,
+            data.col,
+            pwd,
+            speed
+        );
 
-        var pmk = await calc_pmk(pwd, data.ssid);
-        console.log("PMK: " + Array.from(pmk)
-            .map(b => b.toString(16).padStart(2, "0"))
-            .join(""));
-
-        var ptk = await calc_ptk(pmk, key_data);
-        console.log("PTK: " + Array.from(ptk)
-            .map(b => b.toString(16).padStart(2, "0"))
-            .join(""));
-
-        var mic_gen = await calc_mic(ptk.slice(0, 16), wpa2_data);
-
-        var mic_hex = Array.from(mic_gen).map(b => b.toString(16).padStart(2, "0")).join("");
-        ret_hash.push(mic_hex);
-        if(mic_hex===data.mic){
-            fetchJson('http://127.0.0.1:8000/ret', 'POST', { key: data.start, data: pwd});
+        try {
+            var pmk = await calc_pmk(pwd, data.ssid);
+            var ptk = await calc_ptk(pmk, key_data);
+            var mic_gen = await calc_mic(ptk.slice(0, 16), wpa2_data);
+            var mic_hex = Array.from(mic_gen).map(b => b.toString(16).padStart(2, "0")).join("");
+            
+            if (mic_hex === data.mic) {
+                addLogEntry(`Найден пароль: ${pwd}`, 'success');
+                await fetchJson('http://127.0.0.1:8002/ret', 'POST', { key: data.start, data: pwd});
+                return;
+            }
+            
+            ret_hash.push(mic_hex);
+        } catch (error) {
+            addLogEntry(`Ошибка при обработке пароля ${pwd}: ${error}`, 'error');
         }
-        console.log("MIC: " + mic_hex);
     }
 
-    var data2 = await fetchJson('http://127.0.0.1:8000/ret', 'POST', { key: data.start, data: "not find"});
-    console.log(data2);
-
-
-
+    addLogEntry('Пароль не найден в данном диапазоне', 'info');
+    var data2 = await fetchJson('http://127.0.0.1:8002/ret', 'POST', { key: data.start, data: "not find"});
+    addLogEntry(`Результат отправлен на сервер: ${JSON.stringify(data2)}`, 'info');
 })();
 
 

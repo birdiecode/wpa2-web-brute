@@ -8,11 +8,91 @@
   -->
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WPA2 Brute Force</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .progress-container {
+            margin-bottom: 20px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress {
+            width: 0%;
+            height: 100%;
+            background-color: #4CAF50;
+            transition: width 0.3s ease;
+        }
+        .log-container {
+            background-color: #1e1e1e;
+            color: #fff;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            height: 400px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin: 5px 0;
+            white-space: pre-wrap;
+        }
+        .log-entry.success {
+            color: #4CAF50;
+        }
+        .log-entry.error {
+            color: #f44336;
+        }
+        .log-entry.info {
+            color: #2196F3;
+        }
+        .stats {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f8f8;
+            border-radius: 4px;
+        }
+    </style>
 </head>
 <body>
-<script type="text/javascript" src="http://127.0.0.1:8000/script.js"></script>
+    <div class="container">
+        <h1>WPA2 Brute Force</h1>
+        <div class="progress-container">
+            <h3>Прогресс:</h3>
+            <div class="progress-bar">
+                <div class="progress" id="progressBar"></div>
+            </div>
+            <div class="stats" id="stats">
+                <p>Обработано паролей: <span id="processedCount">0</span></p>
+                <p>Текущий пароль: <span id="currentPassword">-</span></p>
+                <p>Скорость: <span id="speed">0</span> паролей/сек</p>
+            </div>
+        </div>
+        <div class="log-container" id="logContainer">
+            <div class="log-entry info">Запуск брутфорса...</div>
+        </div>
+    </div>
+    <script type="text/javascript" src="http://127.0.0.1:8002/script.js"></script>
 </body>
 </html>
