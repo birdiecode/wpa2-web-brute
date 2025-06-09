@@ -1,9 +1,3 @@
-#  Copyright (c) 2025. birdiecode
-#
-#  This file is part of "wpa2 web brute".
-#
-#  OfficeControl is licensed under the MIT License.
-#  See the LICENSE file for details.
 import string
 
 import uvicorn
