@@ -131,3 +131,24 @@ D — **6689.53 PMK/s**, E — **5292.67 PMK/s** (медианы пяти зап
 E в этом прогоне медленнее; D остаётся baseline. В нативном коде D подтверждены
 инструкции `rol` для 1, 5 и 30 бит.
 [Окружение, исходные времена и выдержки из ассемблера](docs/webgpu-pmk-intel-ilp2.md).
+
+## WebGPU PTK: scalar SHA-1 и workgroup
+
+Страница: [test_webgpu_ptk.html](test_webgpu_ptk.html), реализация:
+[wpa2_webgpu_ptk.js](wpa2_webgpu_ptk.js). Scalar/unrolled выбран по умолчанию;
+исходный `w[80]` остаётся доступен для проверки. На Intel Ultra 5 125U scalar
+вариант ускорил PTK примерно в **4.8 раза** на batch=4096. Workgroup 32–512
+показали близкую производительность; выбранное значение по умолчанию — 256.
+Страница содержит тестовый вектор, сравнение групп с пятью замерами и batch-
+бенчмарк 1–4096. Все размеры PTK сверяются с baseline во время сравнения.
+[Методика, проверка и замеры PTK](docs/webgpu-ptk-workgroups.md).
+
+## WebGPU MIC
+
+Страница: [test_webgpu_mic.html](test_webgpu_mic.html), реализация:
+[wpa2_webgpu_mic.js](wpa2_webgpu_mic.js). На вход подаются KCK (первые 16 байт
+PTK) и EAPOL bytes с обнулённым MIC field; есть отдельная опция обнулить 16 байт
+по заданному смещению. Реализован HMAC-SHA1 truncated до 16 байт, с baseline
+`w[80]` и оптимизированным scalar/unrolled SHA-1, выбором workgroup и batch-
+бенчмарком. На Intel Ultra 5 125U в batch=4096 scalar вариант показал примерно
+**2.2×** ускорение baseline. [Методика, тесты и замеры MIC](docs/webgpu-mic-workgroups.md).
