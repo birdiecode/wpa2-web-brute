@@ -81,7 +81,7 @@ const groupWGSL = scalarWGSL
     .replace('@compute @workgroup_size(1)', 'override WORKGROUP_SIZE: u32 = 256u;\n@compute @workgroup_size(WORKGROUP_SIZE)');
 
 class WebGPUMIC {
-    static async create() {
+    static async create(options = {}) {
         if (!navigator.gpu) throw new Error('WebGPU недоступен; используйте поддерживаемый браузер через HTTPS или localhost.');
         const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
         if (!adapter) throw new Error('WebGPU adapter не найден');
@@ -89,14 +89,15 @@ class WebGPUMIC {
         const device = await adapter.requestDevice({ requiredLimits: {
             maxComputeInvocationsPerWorkgroup: limit, maxComputeWorkgroupSizeX: limit,
         } });
-        try { return new WebGPUMIC(device, adapter, limit); }
+        try { return new WebGPUMIC(device, adapter, limit, options.lite === true); }
         catch (error) { device.destroy(); throw error; }
     }
 
-    constructor(device, _adapter, groupLimit) {
+    constructor(device, _adapter, groupLimit, lite = false) {
         this.device = device;
         this.maxBatch = Math.min(4096, Math.floor(device.limits.maxStorageBufferBindingSize / 16));
         this.groupSizes = GROUP_SIZES.filter(size => size <= groupLimit);
+        this.defaultWorkgroupSize = this.groupSizes.includes(256) ? 256 : this.groupSizes[this.groupSizes.length - 1];
         const bgl = device.createBindGroupLayout({ entries: [
             { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
             { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
@@ -115,8 +116,9 @@ class WebGPUMIC {
             });
         };
         this.ready = (async () => {
-            await compile(WGSL, [['baseline']]);
-            await compile(groupWGSL, this.groupSizes.map(size => [`scalar${size}`, { WORKGROUP_SIZE: size }]));
+            if (!lite) await compile(WGSL, [['baseline']]);
+            const sizes = lite ? [this.defaultWorkgroupSize] : this.groupSizes;
+            await compile(groupWGSL, sizes.map(size => [`scalar${size}`, { WORKGROUP_SIZE: size }]));
         })();
         this.bindGroupLayout = bgl;
         this.keyBuffer = device.createBuffer({ size: 16 * this.maxBatch, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });

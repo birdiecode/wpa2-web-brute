@@ -152,3 +152,7 @@ PTK) и EAPOL bytes с обнулённым MIC field; есть отдельна
 `w[80]` и оптимизированным scalar/unrolled SHA-1, выбором workgroup и batch-
 бенчмарком. На Intel Ultra 5 125U в batch=4096 scalar вариант показал примерно
 **2.2×** ускорение baseline. [Методика, тесты и замеры MIC](docs/webgpu-mic-workgroups.md).
+
+Для полной цепочки используйте [test_webgpu.html](test_webgpu.html): одна форма
+запускает PMK → PTK → MIC, показывает промежуточные значения и проверяет
+независимый тестовый вектор на каждом этапе. [Описание полной цепочки](docs/webgpu-full-chain.md).

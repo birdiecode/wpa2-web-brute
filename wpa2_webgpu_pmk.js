@@ -305,13 +305,14 @@ const VARIANTS = {
 const INPUT_SIZE = 164;
 const OUTPUT_SIZE = 32;
 const MAX_BATCH = 4096;
-const out = document.querySelector('#out');
-const status = document.querySelector('#status');
-const buttons = document.querySelectorAll('button:not(#stop), select, input');
+const standaloneUI = !!document.querySelector('#pmk-form');
+const out = standaloneUI ? document.querySelector('#out') : null;
+const status = standaloneUI ? document.querySelector('#status') : null;
+const buttons = standaloneUI ? document.querySelectorAll('button:not(#stop), select, input') : [];
 let stopRequested = false;
-document.querySelector('#stop').addEventListener('click', () => { stopRequested = true; });
+if (standaloneUI) document.querySelector('#stop').addEventListener('click', () => { stopRequested = true; });
 
-async function initWebGPU() {
+async function initWebGPU(lite = false) {
     if (!navigator.gpu) throw new Error('WebGPU недоступен. Откройте страницу через HTTPS или localhost в браузере с поддержкой WebGPU.');
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) throw new Error('WebGPU adapter не найден');
@@ -340,17 +341,23 @@ async function initWebGPU() {
                 });
             }
         }
-        await compile(WGSL80, [['mono80', 'main']]);
-        await compile(WGSL, [['mono16', 'main']]);
-        await compile(SCALAR_WGSL, [['scalar', 'main']]);
-        await compile(ILP2_WGSL, [['ilp2', 'main']]);
         const workgroupSizes = WORKGROUP_SIZES.filter(size => size <= groupLimit);
-        await compile(GROUP_WGSL, workgroupSizes.filter(size => size > 1).map(size =>
-            [`scalar${size}`, 'main', { WORKGROUP_SIZE: size }]));
-        await compile(SPLIT_WGSL, [
-            ['init', 'init'], ['loop128', 'loop_chunk', { LOOP_COUNT: 128 }],
-            ['loop127', 'loop_chunk', { LOOP_COUNT: 127 }], ['finish', 'finish'],
-        ]);
+        if (lite) {
+            await compile(SCALAR_WGSL, [['scalar', 'main']]);
+            await compile(GROUP_WGSL, workgroupSizes.filter(size => size === 32).map(size =>
+                [`scalar${size}`, 'main', { WORKGROUP_SIZE: size }]));
+        } else {
+            await compile(WGSL80, [['mono80', 'main']]);
+            await compile(WGSL, [['mono16', 'main']]);
+            await compile(SCALAR_WGSL, [['scalar', 'main']]);
+            await compile(ILP2_WGSL, [['ilp2', 'main']]);
+            await compile(GROUP_WGSL, workgroupSizes.filter(size => size > 1).map(size =>
+                [`scalar${size}`, 'main', { WORKGROUP_SIZE: size }]));
+            await compile(SPLIT_WGSL, [
+                ['init', 'init'], ['loop128', 'loop_chunk', { LOOP_COUNT: 128 }],
+                ['loop127', 'loop_chunk', { LOOP_COUNT: 127 }], ['finish', 'finish'],
+            ]);
+        }
         const inputBuffer = device.createBuffer({ size: INPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
         const outputBuffer = device.createBuffer({ size: OUTPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
         const readBuffer = device.createBuffer({ size: OUTPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -370,10 +377,11 @@ async function initWebGPU() {
     }
 }
 
-function readInput() {
+function packInput(password, ssidText) {
     const enc = new TextEncoder();
-    const pw = enc.encode(document.querySelector('#password').value);
-    const ssid = enc.encode(document.querySelector('#ssid').value);
+    if (typeof password !== 'string' || typeof ssidText !== 'string') throw new TypeError('Пароль и SSID должны быть строками');
+    const pw = enc.encode(password);
+    const ssid = enc.encode(ssidText);
     if (pw.length !== 8) throw new Error('Пароль должен быть ровно 8 байт UTF-8');
     if (ssid.length < 1 || ssid.length > 32) throw new Error('SSID должен быть 1..32 байта UTF-8');
     const data = new Uint32Array(INPUT_SIZE / 4);
@@ -382,6 +390,7 @@ function readInput() {
     data[40] = ssid.length;
     return data;
 }
+function readInput() { return packInput(document.querySelector('#password').value, document.querySelector('#ssid').value); }
 // D uses one candidate per invocation; E interleaves two. Batch counts always mean candidates.
 async function calculateBatch(gpu, data, variant = 'scalar', workgroupSize = 1) {
     if (!Object.hasOwn(VARIANTS, variant)) throw new Error('Неизвестный вариант PMK');
@@ -396,8 +405,9 @@ async function calculateBatch(gpu, data, variant = 'scalar', workgroupSize = 1) 
     device.queue.writeBuffer(inputBuffer, 0, data);
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
+    const pipelineName = variant === 'ilp2' ? 'ilp2' : workgroupSize > 1 ? `scalar${workgroupSize}` : variant;
     const activeBindGroup = variant === 'ilp2' || workgroupSize > 1 ? device.createBindGroup({
-        layout: pipelines.ilp2.getBindGroupLayout(0),
+        layout: pipelines[pipelineName].getBindGroupLayout(0),
         entries: [
             { binding: 0, resource: { buffer: inputBuffer, size: data.byteLength } },
             { binding: 1, resource: { buffer: outputBuffer } },
@@ -417,7 +427,7 @@ async function calculateBatch(gpu, data, variant = 'scalar', workgroupSize = 1) 
         dispatch('loop127');
         dispatch('finish');
     } else {
-        dispatch(workgroupSize > 1 ? `scalar${workgroupSize}` : variant);
+        dispatch(pipelineName);
     }
     pass.end();
     const byteLength = OUTPUT_SIZE * count;
@@ -542,6 +552,34 @@ async function compareWorkgroups(gpu, base) {
             `min=${Math.min(...times).toFixed(2)}  max=${Math.max(...times).toFixed(2)} ms\n` +
             `samples: ${times.map(t => t.toFixed(2)).join(', ')} ms\n\n`;
     }
+}
+if (!standaloneUI) {
+    globalThis.WebGPUPMK = {
+        async create() {
+            const gpu = await initWebGPU(true);
+            return {
+                async calculate(passwords, ssid) {
+                    if (!Array.isArray(passwords) || passwords.length < 1 || passwords.length > MAX_BATCH)
+                        throw new RangeError(`Число паролей должно быть от 1 до ${MAX_BATCH}`);
+                    const data = new Uint32Array((INPUT_SIZE / 4) * passwords.length);
+                    for (let i = 0; i < passwords.length; i++) data.set(packInput(passwords[i], ssid), i * (INPUT_SIZE / 4));
+                    const wg = gpu.workgroupSizes.includes(32) ? 32 : 1;
+                    const result = await calculateBatch(gpu, data, 'scalar', wg);
+                    const pmks = Array.from({ length: passwords.length }, (_, i) => {
+                        const bytes = new Uint8Array(32), view = new DataView(bytes.buffer);
+                        for (let j = 0; j < 8; j++) view.setUint32(j * 4, result.words[i * 8 + j], false);
+                        return bytes;
+                    });
+                    return { pmks, time: result.time };
+                },
+                dispose() {
+                    for (const buffer of [gpu.inputBuffer, gpu.outputBuffer, gpu.readBuffer, gpu.tmpBuffer]) buffer.destroy();
+                    gpu.device.destroy();
+                },
+            };
+        },
+    };
+    return;
 }
 function setDisabled(disabled) {
     buttons.forEach(button => { button.disabled = disabled; });

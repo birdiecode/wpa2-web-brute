@@ -111,13 +111,14 @@ const GROUP_WGSL = SCALAR_WGSL
 const INPUT_SIZE = 160;
 const OUTPUT_SIZE = 64;
 const MAX_BATCH = 4096;
-const out = document.querySelector('#out');
-const status = document.querySelector('#status');
-const buttons = document.querySelectorAll('button:not(#stop), select');
+const standaloneUI = !!document.querySelector('#ptk-form');
+const out = standaloneUI ? document.querySelector('#out') : null;
+const status = standaloneUI ? document.querySelector('#status') : null;
+const buttons = standaloneUI ? document.querySelectorAll('button:not(#stop), select') : [];
 let stopRequested = false;
-document.querySelector('#stop').addEventListener('click', () => { stopRequested = true; });
+if (standaloneUI) document.querySelector('#stop').addEventListener('click', () => { stopRequested = true; });
 
-async function initWebGPU() {
+async function initWebGPU(lite = false) {
     if (!navigator.gpu) throw new Error('WebGPU недоступен. Откройте страницу через HTTPS или localhost в браузере с поддержкой WebGPU.');
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) throw new Error('WebGPU adapter не найден');
@@ -144,10 +145,15 @@ async function initWebGPU() {
                 });
             }
         }
-        await compile(WGSL, [['baseline', 'main']]);
-        await compile(GROUP_WGSL, WORKGROUP_SIZES.filter(size => size <= groupLimit).map(size =>
-            [`scalar${size}`, 'main', { WORKGROUP_SIZE: size }]));
         const workgroupSizes = WORKGROUP_SIZES.filter(size => size <= groupLimit);
+        if (lite) {
+            const size = workgroupSizes.includes(256) ? 256 : workgroupSizes[workgroupSizes.length - 1];
+            await compile(GROUP_WGSL, [[`scalar${size}`, 'main', { WORKGROUP_SIZE: size }]]);
+        } else {
+            await compile(WGSL, [['baseline', 'main']]);
+            await compile(GROUP_WGSL, workgroupSizes.map(size =>
+                [`scalar${size}`, 'main', { WORKGROUP_SIZE: size }]));
+        }
         const inputBuffer = device.createBuffer({ size: INPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
         const outputBuffer = device.createBuffer({ size: OUTPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
         const readBuffer = device.createBuffer({ size: OUTPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -198,8 +204,10 @@ const vector = {
     keyData: Array.from({ length: 76 }, (_, i) => i.toString(16).padStart(2, '0')).join(''),
     ptk: 'e4498e7375804649bee63f3e89639568e2e43cea122829e4caf9a0d903a7c1ed4a7a2be58646bd0a7530f5b3ccce0e6652e88b8747478cf5785260c8c3e7dd2a',
 };
-document.querySelector('#pmk').value = vector.pmk;
-document.querySelector('#key-data').value = vector.keyData;
+if (document.querySelector('#ptk-form')) {
+    document.querySelector('#pmk').value = vector.pmk;
+    document.querySelector('#key-data').value = vector.keyData;
+}
 
 // One invocation per input record; a batch is submitted in one dispatch.
 async function calculateBatch(gpu, data, variant = 'scalar', workgroupSize = 32) {
@@ -237,6 +245,40 @@ async function calculateBatch(gpu, data, variant = 'scalar', workgroupSize = 32)
     } finally {
         readBuffer.unmap();
     }
+}
+if (!standaloneUI) {
+    globalThis['WebGPUPTK'] = {
+        async create() {
+            const gpu = await initWebGPU(true);
+            const workgroupSize = gpu.workgroupSizes.includes(256) ? 256 : gpu.workgroupSizes[gpu.workgroupSizes.length - 1];
+            return {
+                async calculate(pmks, keyData) {
+                    if (!Array.isArray(pmks) || pmks.length < 1 || pmks.length > MAX_BATCH)
+                        throw new RangeError(`Число PMK должно быть от 1 до ${MAX_BATCH}`);
+                    if (!(keyData instanceof Uint8Array) || keyData.length !== 76)
+                        throw new TypeError('keyData должен содержать ровно 76 байт');
+                    const data = new Uint32Array((INPUT_SIZE / 4) * pmks.length);
+                    for (let i = 0; i < pmks.length; i++) {
+                        if (!(pmks[i] instanceof Uint8Array) || pmks[i].length !== 32)
+                            throw new TypeError('Каждый PMK должен содержать ровно 32 байта');
+                        data.set(packInput(pmks[i], keyData), i * (INPUT_SIZE / 4));
+                    }
+                    const result = await calculateBatch(gpu, data, 'scalar', workgroupSize);
+                    const ptks = Array.from({ length: pmks.length }, (_, i) => {
+                        const bytes = new Uint8Array(64), view = new DataView(bytes.buffer);
+                        for (let j = 0; j < 16; j++) view.setUint32(j * 4, result.words[i * 16 + j], false);
+                        return bytes;
+                    });
+                    return { ptks, time: result.time };
+                },
+                dispose() {
+                    for (const buffer of [gpu.inputBuffer, gpu.outputBuffer, gpu.readBuffer]) buffer.destroy();
+                    gpu.device.destroy();
+                },
+            };
+        },
+    };
+    return;
 }
 
 function hex(words) {

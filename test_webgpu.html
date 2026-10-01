@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WPA2 PMK → PTK → MIC — WebGPU</title>
+  <style>
+    body { font-family: monospace; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #111; color: #ddd; }
+    label { display: block; margin: 15px 0; }
+    input[type="text"], textarea { box-sizing: border-box; width: 100%; background: #222; color: #fff; border: 1px solid #555; padding: 8px; font: inherit; overflow-wrap: anywhere; }
+    input[type="number"] { width: 7em; padding: 6px; background: #222; color: #fff; border: 1px solid #555; font: inherit; }
+    button { padding: 8px 16px; margin: 4px 0; cursor: pointer; }
+    .ok { color: #4cff4c; }
+    .error { color: #ff5555; }
+    pre { background: #1b1b1b; padding: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+  </style>
+</head>
+<body>
+  <h1>WPA2 PMK → PTK → MIC — WebGPU</h1>
+  <p>Полная цепочка: PBKDF2-HMAC-SHA1 (4096 итераций) → WPA2 PRF-512 → HMAC-SHA1 MIC (первые 16 байт).</p>
+  <p>Пароль — ровно 8 байт UTF-8; SSID — 1–32 байта UTF-8. keyData (76 байт) = min(AP, STA) || max(AP, STA) || min(ANonce, SNonce) || max(ANonce, SNonce). EAPOL передавайте как hex с обнулённым MIC field.</p>
+  <form id="wpa2-form">
+    <label>Пароль: <input id="password" type="text" required></label>
+    <label>SSID: <input id="ssid" type="text" required></label>
+    <label>Упорядоченный keyData (76 байт, hex): <textarea id="key-data" rows="3" required spellcheck="false"></textarea></label>
+    <label>EAPOL frame (hex): <textarea id="message" rows="4" required spellcheck="false"></textarea></label>
+    <label><input id="zero-mic" type="checkbox"> Обнулить MIC field в EAPOL перед расчётом</label>
+    <label>Смещение MIC field от начала EAPOL (байты): <input id="mic-offset" type="number" min="0" value="81"></label>
+    <button id="run" type="submit">Вычислить PMK → PTK → MIC</button>
+    <button id="self-test" type="button">Проверить полный тестовый вектор</button>
+    <button id="benchmark" type="button">Бенчмарк полной цепочки, batch 1–4096</button>
+    <button id="stop" type="button" disabled>Остановить после текущего этапа</button>
+  </form>
+  <p>Используются оптимизированные scalar/unrolled SHA-1 варианты; промежуточные PMK/PTK выводятся для проверки. Self-test использует отдельный синтетический вектор и не меняет поля.</p>
+  <p id="status" role="status" aria-live="polite">Готово к запуску WebGPU.</p>
+  <pre id="out">Ожидание...</pre>
+  <script type="text/javascript" src="./wpa2_webgpu_pmk.js"></script>
+  <script type="text/javascript" src="./wpa2_webgpu_ptk.js"></script>
+  <script type="text/javascript" src="./wpa2_webgpu_mic.js"></script>
+  <script type="text/javascript" src="./wpa2_webgpu.js"></script>
+</body>
+</html>
