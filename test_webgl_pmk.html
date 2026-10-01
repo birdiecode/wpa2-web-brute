@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вычисление PMK — WebGL2</title>
+    <style>
+        body { font-family: monospace; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #111; color: #ddd; }
+        label { display: block; margin: 15px 0; }
+        input { background: #222; color: #fff; border: 1px solid #555; padding: 8px; }
+        button { padding: 8px 16px; cursor: pointer; }
+        .ok { color: #4cff4c; }
+        .error { color: #ff5555; }
+        pre { background: #1b1b1b; padding: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    </style>
+</head>
+<body>
+    <h1>Вычисление PMK</h1>
+    <p>PBKDF2-HMAC-SHA1, 4096 итераций, 32 байта. Пароль — ровно 8 байт UTF-8, SSID — до 32 байт.</p>
+    <form id="pmk-form">
+        <label>Пароль: <input id="password" value="12345678" required></label>
+        <label>SSID: <input id="ssid" value="Test_WiFi"></label>
+        <button id="run" type="submit">Вычислить PMK</button>
+        <button id="benchmark" type="button">Бенчмарк</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <pre id="output">Ожидание...</pre>
+
+    <script src="wpa2_webgl_pmk.js"></script>
+    <script>
+        const encoder = new TextEncoder();
+        const output = document.getElementById('output');
+        const status = document.getElementById('status');
+        const button = document.getElementById('run');
+        const benchmarkButton = document.getElementById('benchmark');
+        let gpu;
+
+        function setBusy(busy) {
+            button.disabled = busy;
+            benchmarkButton.disabled = busy;
+        }
+
+        function hex(bytes) {
+            return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+
+        document.getElementById('pmk-form').addEventListener('submit', async event => {
+            event.preventDefault();
+            setBusy(true);
+            status.className = '';
+            status.textContent = 'Вычисление...';
+            output.textContent = '';
+            try {
+                const password = document.getElementById('password').value;
+                const ssid = document.getElementById('ssid').value;
+                if (encoder.encode(password).length !== 8) {
+                    throw new Error('Пароль должен быть ровно 8 байт UTF-8');
+                }
+                if (encoder.encode(ssid).length > 32) {
+                    throw new Error('SSID должен быть не длиннее 32 байт UTF-8');
+                }
+                gpu ??= new WebGL2PMK();
+                const [pmk] = await gpu.derive([password], ssid);
+                status.className = 'ok';
+                status.textContent = '✓ PMK вычислен';
+                output.textContent = `WebGL2 PMK:\n${hex(pmk)}`;
+            } catch (error) {
+                status.className = 'error';
+                status.textContent = 'Ошибка';
+                output.textContent = error.message;
+            } finally {
+                setBusy(false);
+            }
+        });
+
+        benchmarkButton.addEventListener('click', async () => {
+            setBusy(true);
+            status.className = '';
+            status.textContent = 'Бенчмарк...';
+            output.textContent = 'WebGL2 PMK: время расчёта и чтения результата (без компиляции шейдеров)\n\n';
+            try {
+                const ssid = document.getElementById('ssid').value;
+                if (encoder.encode(ssid).length > 32) {
+                    throw new Error('SSID должен быть не длиннее 32 байт UTF-8');
+                }
+                gpu ??= new WebGL2PMK();
+                for (const count of [1, 2, 4, 8, 16, 32]) {
+                    // Даём странице обновиться перед следующим расчётом.
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    const passwords = Array.from({ length: count }, (_, i) => String(10000000 + i));
+                    const start = performance.now();
+                    await gpu.derive(passwords, ssid);
+                    const elapsed = performance.now() - start;
+                    const rate = elapsed > 0 ? (count * 1000 / elapsed).toFixed(2) : '—';
+                    output.textContent += `batch=${count}  time=${elapsed.toFixed(2)} ms  rate=${rate} PMK/s\n`;
+                }
+                status.className = 'ok';
+                status.textContent = '✓ Бенчмарк завершён';
+            } catch (error) {
+                status.className = 'error';
+                status.textContent = 'Ошибка';
+                output.textContent += `\n${error.message}`;
+            } finally {
+                setBusy(false);
+            }
+        });
+    </script>
+</body>
+</html>
