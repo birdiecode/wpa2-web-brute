@@ -66,6 +66,9 @@ void main() {
 }`;
 
   class WebGL2MIC {
+    static get shaders() {
+      return { vertex: vertexSource, fragment: fragmentSource };
+    }
     constructor() {
       this.canvas = document.createElement('canvas');
       this.gl = this.canvas.getContext('webgl2', {

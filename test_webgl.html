@@ -16,6 +16,7 @@
 </head>
 <body>
     <h1>PMK → PTK → MIC</h1>
+    <p>PMK и PTK остаются на GPU; выводится только итоговый MIC.</p>
     <p>Полный расчёт WPA2 через WebGL2. Пароль — ровно 8 байт UTF-8, SSID — до 32 байт.</p>
     <p>keyData (76 байт) = min(AP, STA) || max(AP, STA) || min(ANonce, SNonce) || max(ANonce, SNonce).
         Адреса — по 6 байт, nonce — по 32 байта; сравнение по байтам.</p>
@@ -25,7 +26,7 @@
         <label>SSID: <input id="ssid" value="Test_WiFi"></label>
         <label>keyData (hex): <textarea id="key-data" rows="3" required spellcheck="false"></textarea></label>
         <label>Сообщение (hex): <textarea id="message" rows="3" spellcheck="false"></textarea></label>
-        <button type="submit">Вычислить PMK, PTK и MIC</button>
+        <button type="submit">Вычислить MIC</button>
         <button id="self-test" type="button">Проверить тестовый вектор</button>
         <button id="benchmark" type="button">Бенчмарк до 4096</button>
     </form>
@@ -43,8 +44,6 @@
             "ssid": "Test_WiFi",
             "keyData": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b",
             "message": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
-            "pmk": "e4a5c4c71b86171f29c19bd0ed6ef0217a32f402ace8066ec5dab52456843c37",
-            "ptk": "53a67a28658402b0d50a1c121ba5462a22575f50fc02d10f6041bf2dd5ea024dc01f27922387be818f29fca711598092f47677806a6f7517487d9e82117aa27d",
             "mic": "f955d7dba6bd85b2560cf3f9d8a501e8"
 };
         const output = document.getElementById('output');
@@ -100,24 +99,22 @@
                 const start = performance.now();
                 const [result] = await gpu.derive([password], ssid, keyData, message);
                 const elapsed = performance.now() - start;
-                output.textContent = `PMK (32 байта):\n${hex(result.pmk)}\n\nPTK (64 байта):\n${hex(result.ptk)}\n\nMIC (16 байт):\n${hex(result.mic)}\n\nВремя всей цепочки: ${elapsed.toFixed(2)} ms`;
+                output.textContent = `MIC (16 байт):\n${hex(result.mic)}\n\nВремя всей цепочки: ${elapsed.toFixed(2)} ms`;
             });
         });
         document.getElementById('self-test').addEventListener('click', () => run(async () => {
             gpu ??= new WPA2WebGL();
             const [result] = await gpu.derive([vector.password], vector.ssid,
                 fromHex(vector.keyData, 76, 'keyData'), fromHex(vector.message, null, 'Сообщение'));
-            for (const name of ['pmk', 'ptk', 'mic']) {
-                output.textContent += `${name.toUpperCase()}:\n${hex(result[name])}\n\n`;
-                if (hex(result[name]) !== vector[name]) throw new Error(`${name.toUpperCase()} не совпадает с тестовым вектором`);
-            }
-            output.textContent += 'Все три результата совпадают с тестовым вектором.';
+            output.textContent = `Ожидаемый MIC:\n${vector.mic}\n\nWebGL2 MIC:\n${hex(result.mic)}`;
+            if (hex(result.mic) !== vector.mic) throw new Error('MIC не совпадает с тестовым вектором');
+            output.textContent += '\n\nMIC всей цепочки совпадает с тестовым вектором.';
         }));
         document.getElementById('benchmark').addEventListener('click', () => run(async () => {
             const { password, ssid, keyData, message } = inputs();
             gpu ??= new WPA2WebGL();
             await gpu.derive([password], ssid, keyData, message);
-            output.textContent = 'Полная цепочка PMK → PTK → MIC, включая передачу данных между этапами; без компиляции шейдеров.\nПачки тестовых паролей 10000000, 10000001, …\n\n';
+            output.textContent = 'Полная цепочка PMK → PTK → MIC, без считывания PMK/PTK в JS; время включает загрузку входов и чтение MIC, без компиляции шейдеров.\nПачки тестовых паролей 10000000, 10000001, …\n\n';
             for (const count of [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]) {
                 status.textContent = `Бенчмарк: batch=${count}…`;
                 await new Promise(resolve => setTimeout(resolve, 100));

@@ -1,6 +1,9 @@
 // WebGL2 PBKDF2-HMAC-SHA1 backend for fixed 8-byte WPA2 passwords.
 // One fragment = one password. Two RGBA32UI render targets = 32-byte PMK.
 class WebGL2PMK {
+  static get shaders() {
+    return { vertex: VS, fragment: FS };
+  }
   constructor() {
     this.canvas = document.createElement("canvas");
     this.gl = this.canvas.getContext("webgl2", {

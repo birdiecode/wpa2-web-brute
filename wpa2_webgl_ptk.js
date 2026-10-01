@@ -13,6 +13,8 @@ void main() {
 precision highp float;
 precision highp int;
 uniform highp usampler2D uPmks;
+uniform highp usampler2D uPmksTail;
+uniform bool uSplitPmks;
 uniform uint uMessage[32];
 layout(location = 0) out uvec4 o0;
 layout(location = 1) out uvec4 o1;
@@ -45,7 +47,9 @@ void shaBlock(inout uint h[5], uint w[80]) {
 void main() {
     int id = int(gl_FragCoord.x);
     uvec4 p0 = texelFetch(uPmks, ivec2(id, 0), 0);
-    uvec4 p1 = texelFetch(uPmks, ivec2(id, 1), 0);
+    uvec4 p1 = uSplitPmks
+        ? texelFetch(uPmksTail, ivec2(id, 0), 0)
+        : texelFetch(uPmks, ivec2(id, 1), 0);
     uint key[8] = uint[8](p0.x, p0.y, p0.z, p0.w, p1.x, p1.y, p1.z, p1.w);
     uint w[80], inner[5], outer[5];
     shaInit(inner);
@@ -83,6 +87,9 @@ void main() {
 }`;
 
   class WebGL2PTK {
+    static get shaders() {
+      return { vertex: vertexSource, fragment: fragmentSource };
+    }
     constructor() {
       this.canvas = document.createElement('canvas');
       this.gl = this.canvas.getContext('webgl2', {
