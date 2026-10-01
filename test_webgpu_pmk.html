@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebGPU WPA2 PMK</title>
+  <style>
+        body { font-family: monospace; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #111; color: #ddd; }
+        label { display: block; margin: 15px 0; }
+        input { background: #222; color: #fff; border: 1px solid #555; padding: 8px; }
+        button { padding: 8px 16px; cursor: pointer; }
+        .ok { color: #4cff4c; }
+        .error { color: #ff5555; }
+        pre { background: #1b1b1b; padding: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        button:disabled { opacity: 0.5; cursor: wait; }
+    </style>
+</head>
+<body>
+  <h1>WPA2 PMK — WebGPU</h1>
+  <p>Пароль — ровно 8 байт UTF-8, SSID — от 1 до 32 байт UTF-8.</p>
+  <form id="pmk-form">
+    <label>Пароль: <input id="password" value="password" required></label>
+    <label>SSID: <input id="ssid" value="IEEE" required></label>
+    <button id="run" type="submit" disabled>Вычислить PMK</button>
+    <button id="benchmark" type="button" disabled>Бенчмарк batch 1–4096</button>
+  </form>
+  <p id="status" role="status" aria-live="polite">Инициализация WebGPU...</p>
+  <pre id="out">Ожидание...</pre>
+  <script type="text/javascript" src="wpa2_webgpu_pmk.js"></script>
+</body>
+</html>
