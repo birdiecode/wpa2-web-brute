@@ -27,7 +27,7 @@
         <label>Сообщение (hex): <textarea id="message" rows="3" spellcheck="false"></textarea></label>
         <button type="submit">Вычислить PMK, PTK и MIC</button>
         <button id="self-test" type="button">Проверить тестовый вектор</button>
-        <button id="benchmark" type="button">Бенчмарк</button>
+        <button id="benchmark" type="button">Бенчмарк до 4096</button>
     </form>
     <p>Проверка использует отдельный фиксированный вектор и не меняет введённые данные.</p>
     <p id="status" role="status" aria-live="polite"></p>
@@ -118,7 +118,8 @@
             gpu ??= new WPA2WebGL();
             await gpu.derive([password], ssid, keyData, message);
             output.textContent = 'Полная цепочка PMK → PTK → MIC, включая передачу данных между этапами; без компиляции шейдеров.\nПачки тестовых паролей 10000000, 10000001, …\n\n';
-            for (const count of [1, 2, 4, 8, 16, 32]) {
+            for (const count of [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]) {
+                status.textContent = `Бенчмарк: batch=${count}…`;
                 await new Promise(resolve => setTimeout(resolve, 100));
                 const passwords = Array.from({ length: count }, (_, i) => String(10000000 + i));
                 const start = performance.now();
