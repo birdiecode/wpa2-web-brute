@@ -116,12 +116,113 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 `;
 
+// Keep the original schedule for controlled comparisons on the same device.
+const WGSL80 = WGSL
+    .replace('var w = blockIn;', `var w: array<u32, 80>;
+    for (var i = 0u; i < 16u; i++) { w[i] = blockIn[i]; }
+    for (var i = 16u; i < 80u; i++) {
+        w[i] = rol(w[i-3u] ^ w[i-8u] ^ w[i-14u] ^ w[i-16u], 1u);
+    }`)
+    .replace(/        let j = i & 15u;[\s\S]*?        var f: u32;/,
+        '        var f: u32;')
+    .replace('+ k + w[j]', '+ k + w[i]');
+
+const SPLIT_WGSL = WGSL.slice(0, WGSL.indexOf('fn pbkdf2_block')) + /* wgsl */ `
+struct Tmp {
+    ipad: array<u32, 5>,
+    opad: array<u32, 5>,
+    dgst1: array<u32, 5>,
+    dgst2: array<u32, 5>,
+    out1: array<u32, 5>,
+    out2: array<u32, 5>,
+}
+@group(0) @binding(2) var<storage, read_write> tmps: array<Tmp>;
+override LOOP_COUNT: u32 = 128u;
+
+@compute @workgroup_size(1)
+fn init(@builtin(global_invocation_id) id: vec3<u32>) {
+    input = inputs[id.x];
+    var tmp: Tmp;
+    tmp.ipad = hmac_state(0x36363636u);
+    tmp.opad = hmac_state(0x5c5c5c5cu);
+    tmp.dgst1 = pbkdf2_u1(tmp.ipad, tmp.opad, 1u);
+    tmp.dgst2 = pbkdf2_u1(tmp.ipad, tmp.opad, 2u);
+    tmp.out1 = tmp.dgst1;
+    tmp.out2 = tmp.dgst2;
+    tmps[id.x] = tmp;
+}
+@compute @workgroup_size(1)
+fn loop_chunk(@builtin(global_invocation_id) id: vec3<u32>) {
+    var tmp = tmps[id.x];
+    for (var j = 0u; j < LOOP_COUNT; j++) {
+        tmp.dgst1 = hmac20(tmp.ipad, tmp.opad, tmp.dgst1);
+        tmp.dgst2 = hmac20(tmp.ipad, tmp.opad, tmp.dgst2);
+        for (var k = 0u; k < 5u; k++) {
+            tmp.out1[k] ^= tmp.dgst1[k];
+            tmp.out2[k] ^= tmp.dgst2[k];
+        }
+    }
+    tmps[id.x] = tmp;
+}
+@compute @workgroup_size(1)
+fn finish(@builtin(global_invocation_id) id: vec3<u32>) {
+    for (var k = 0u; k < 5u; k++) { outputs[id.x].pmk[k] = tmps[id.x].out1[k]; }
+    for (var k = 0u; k < 3u; k++) { outputs[id.x].pmk[5u+k] = tmps[id.x].out2[k]; }
+}
+`;
+// Generate once, before pipeline compilation. The emitted hot compression has
+// 16 scalar schedule registers and 80 static rounds: no array indexing/round loop.
+function generateSHA120() {
+    const lines = [
+        'fn sha1_20(state: array<u32, 5>, m0: u32, m1: u32, m2: u32, m3: u32, m4: u32) -> array<u32, 5> {',
+    ];
+    for (let i = 0; i < 16; i++) {
+        const value = i < 5 ? `m${i}` : i === 5 ? '0x80000000u' : i === 15 ? '672u' : '0u';
+        lines.push(`    var w${i}: u32 = ${value};`);
+    }
+    for (const [i, name] of ['a', 'b', 'c', 'd', 'e'].entries()) {
+        lines.push(`    var ${name} = state[${i}];`);
+    }
+    for (let i = 0; i < 80; i++) {
+        const j = i & 15;
+        if (i >= 16) {
+            lines.push(`    w${j} = rol(w${(i - 3) & 15} ^ w${(i - 8) & 15} ^ w${(i - 14) & 15} ^ w${j}, 1u);`);
+        }
+        const f = i < 20 ? '((b & c) | ((~b) & d))' : i < 40 ? '(b ^ c ^ d)' :
+            i < 60 ? '((b & c) | (b & d) | (c & d))' : '(b ^ c ^ d)';
+        const k = ['0x5a827999u', '0x6ed9eba1u', '0x8f1bbcdcu', '0xca62c1d6u'][Math.floor(i / 20)];
+        lines.push(`    { // Round ${i}
+        let next = rol(a, 5u) + ${f} + e + ${k} + w${j};
+        e = d; d = c; c = rol(b, 30u); b = a; a = next;
+    }`);
+    }
+    lines.push('    return array<u32, 5>(state[0]+a, state[1]+b, state[2]+c, state[3]+d, state[4]+e);', '}');
+    return lines.join('\n');
+}
+// Retain A's generic w[80] for key setup and U1; specialize only U2..U4096.
+const SCALAR_WGSL = WGSL80.slice(0, WGSL80.indexOf('fn hmac20(')) +
+    generateSHA120() + `
+fn hmac20(innerBase: array<u32, 5>, outerBase: array<u32, 5>, msg: array<u32, 5>) -> array<u32, 5> {
+    let h = sha1_20(innerBase, msg[0], msg[1], msg[2], msg[3], msg[4]);
+    return sha1_20(outerBase, h[0], h[1], h[2], h[3], h[4]);
+}
+` + WGSL80.slice(WGSL80.indexOf('fn pbkdf2_u1('));
+
+const VARIANTS = {
+    mono80: 'A: Монолитный w[80]',
+    mono16: 'B: Монолитный w[16]',
+    split128: 'C: init → loop(128) → final, w[16]',
+    scalar: 'D: Монолитный scalar/unrolled',
+};
+
 const INPUT_SIZE = 164;
 const OUTPUT_SIZE = 32;
 const MAX_BATCH = 4096;
 const out = document.querySelector('#out');
 const status = document.querySelector('#status');
-const buttons = document.querySelectorAll('button');
+const buttons = document.querySelectorAll('button:not(#stop), select, input');
+let stopRequested = false;
+document.querySelector('#stop').addEventListener('click', () => { stopRequested = true; });
 
 async function initWebGPU() {
     if (!navigator.gpu) throw new Error('WebGPU недоступен. Откройте страницу через HTTPS или localhost в браузере с поддержкой WebGPU.');
@@ -129,26 +230,44 @@ async function initWebGPU() {
     if (!adapter) throw new Error('WebGPU adapter не найден');
     const device = await adapter.requestDevice();
     try {
-        const shader = device.createShaderModule({ code: WGSL });
-        const compilation = await shader.getCompilationInfo();
-        const errors = compilation.messages.filter(message => message.type === 'error');
-        if (errors.length) {
-            throw new Error(errors.map(message => `${message.lineNum}:${message.linePos} ${message.message}`).join('\n'));
+        const bindGroupLayout = device.createBindGroupLayout({ entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        ] });
+        const layout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+        const pipelines = {};
+        async function compile(code, entries) {
+            const module = device.createShaderModule({ code });
+            const info = await module.getCompilationInfo();
+            const errors = info.messages.filter(message => message.type === 'error');
+            if (errors.length) throw new Error(errors.map(m => `${m.lineNum}:${m.linePos} ${m.message}`).join('\n'));
+            for (const [name, entryPoint, constants = {}] of entries) {
+                pipelines[name] = await device.createComputePipelineAsync({
+                    layout, compute: { module, entryPoint, constants },
+                });
+            }
         }
-        const pipeline = await device.createComputePipelineAsync({
-            layout: 'auto', compute: { module: shader, entryPoint: 'main' }
-        });
+        await compile(WGSL80, [['mono80', 'main']]);
+        await compile(WGSL, [['mono16', 'main']]);
+        await compile(SCALAR_WGSL, [['scalar', 'main']]);
+        await compile(SPLIT_WGSL, [
+            ['init', 'init'], ['loop128', 'loop_chunk', { LOOP_COUNT: 128 }],
+            ['loop127', 'loop_chunk', { LOOP_COUNT: 127 }], ['finish', 'finish'],
+        ]);
         const inputBuffer = device.createBuffer({ size: INPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
         const outputBuffer = device.createBuffer({ size: OUTPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
         const readBuffer = device.createBuffer({ size: OUTPUT_SIZE * MAX_BATCH, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const tmpBuffer = device.createBuffer({ size: 120 * MAX_BATCH, usage: GPUBufferUsage.STORAGE });
         const bindGroup = device.createBindGroup({
-            layout: pipeline.getBindGroupLayout(0),
+            layout: bindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: inputBuffer } },
-                { binding: 1, resource: { buffer: outputBuffer } }
+                { binding: 1, resource: { buffer: outputBuffer } },
+                { binding: 2, resource: { buffer: tmpBuffer } }
             ]
         });
-        return { device, pipeline, inputBuffer, outputBuffer, readBuffer, bindGroup };
+        return { device, pipelines, inputBuffer, outputBuffer, readBuffer, bindGroup, tmpBuffer };
     } catch (error) {
         device.destroy();
         throw error;
@@ -167,19 +286,32 @@ function readInput() {
     data[40] = ssid.length;
     return data;
 }
-// One invocation per input record; a batch is submitted in one dispatch.
-async function calculateBatch(gpu, data) {
+// One invocation per candidate. Split mode keeps all intermediate state on the GPU.
+async function calculateBatch(gpu, data, variant = 'split128') {
+    if (!Object.hasOwn(VARIANTS, variant)) throw new Error('Неизвестный вариант PMK');
     const count = data.length / (INPUT_SIZE / 4);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BATCH) {
         throw new Error(`Размер batch должен быть от 1 до ${MAX_BATCH}`);
     }
-    const { device, pipeline, inputBuffer, outputBuffer, readBuffer, bindGroup } = gpu;
+    const { device, pipelines, inputBuffer, outputBuffer, readBuffer, bindGroup } = gpu;
     device.queue.writeBuffer(inputBuffer, 0, data);
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(count);
+    const dispatch = name => {
+        pass.setPipeline(pipelines[name]);
+        pass.dispatchWorkgroups(count);
+    };
+    if (variant === 'split128') {
+        dispatch('init');
+        // U1 is already calculated: 31 * 128 + 127 = 4095 remaining rounds.
+        // Dispatch boundaries order storage writes before the next chunk reads them.
+        for (let i = 0; i < 31; i++) dispatch('loop128');
+        dispatch('loop127');
+        dispatch('finish');
+    } else {
+        dispatch(variant);
+    }
     pass.end();
     const byteLength = OUTPUT_SIZE * count;
     encoder.copyBufferToBuffer(outputBuffer, 0, readBuffer, 0, byteLength);
@@ -206,6 +338,59 @@ function makeBatch(base, count) {
     }
     return data;
 }
+function median(values) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+async function compareVariants(gpu, base, onlyAD = false) {
+    const repeats = Number(document.querySelector('#repeats').value);
+    const variants = onlyAD ? ['mono80', 'scalar'] : Object.keys(VARIANTS);
+    out.textContent = `Сравнение: ${repeats} замеров после одного прогрева каждого варианта на каждом batch.\n` +
+        'Время: загрузка, кодирование команд, вычисление, чтение; данные подготовлены заранее.\n' +
+        'Порядок вариантов чередуется. Результаты каждого запуска сверяются целиком.\n\n';
+    const checkStop = () => {
+        if (stopRequested) throw new Error('Остановлено пользователем');
+    };
+    for (const count of (onlyAD ? [4096] : [512, 1024, 4096])) {
+        const data = makeBatch(base, count);
+        const samples = Object.fromEntries(variants.map(v => [v, []]));
+        let expected;
+        const verify = words => {
+            if (!expected) expected = words;
+            else if (words.some((word, i) => word !== expected[i])) {
+                throw new Error(`Результаты вариантов не совпали при batch=${count}`);
+            }
+        };
+        for (const v of variants) {
+            checkStop();
+            status.textContent = `Прогрев: batch=${count}, ${VARIANTS[v]}`;
+            await new Promise(resolve => setTimeout(resolve, 0));
+            verify((await calculateBatch(gpu, data, v)).words);
+        }
+        for (let round = 0; round < repeats; round++) {
+            for (let j = 0; j < variants.length; j++) {
+                checkStop();
+                const v = variants[(j + round) % variants.length];
+                status.textContent = `batch=${count}, ${VARIANTS[v]}, замер ${round + 1}/${repeats}`;
+                await new Promise(resolve => setTimeout(resolve, 0));
+                const start = performance.now();
+                const result = await calculateBatch(gpu, data, v);
+                samples[v].push(performance.now() - start);
+                verify(result.words); // Excluded from measured time.
+                checkStop();
+            }
+        }
+        for (const v of variants) {
+            const values = samples[v];
+            const med = median(values);
+            out.textContent += `batch=${count}  ${VARIANTS[v]}\n` +
+                `median=${med.toFixed(2)} ms  rate=${(count * 1000 / med).toFixed(2)} PMK/s  ` +
+                `min=${Math.min(...values).toFixed(2)}  max=${Math.max(...values).toFixed(2)} ms\n` +
+                `samples: ${values.map(x => x.toFixed(2)).join(', ')} ms\n\n`;
+        }
+    }
+}
 function setDisabled(disabled) {
     buttons.forEach(button => { button.disabled = disabled; });
 }
@@ -227,34 +412,41 @@ try {
     async function run(mode = 'single') {
         if (busy || deviceLost) return;
         busy = true;
+        stopRequested = false;
+        document.querySelector('#stop').disabled = false;
         setDisabled(true);
         status.className = '';
         status.textContent = 'Вычисление...';
         out.textContent = '';
         try {
             const base = readInput();
-            if (mode === 'benchmark') {
-                out.textContent = 'Пароли для бенчмарка: 00000000 … 00004095; SSID из поля.\nВремя включает подготовку и загрузку данных, расчёт и чтение результата; без компиляции и выделения GPU-буферов.\n\n';
+            const variant = document.querySelector('#variant').value;
+            if (mode === 'compare' || mode === 'compare-ad') {
+                await compareVariants(gpu, base, mode === 'compare-ad');
+            } else if (mode === 'benchmark') {
+                out.textContent = `${VARIANTS[variant]}\n` + 'Пароли для бенчмарка: 00000000 … 00004095; SSID из поля.\nВремя включает подготовку и загрузку данных, расчёт и чтение результата; без компиляции и выделения GPU-буферов.\n\n';
                 status.textContent = 'Прогрев...';
-                await calculateBatch(gpu, makeBatch(base, 1));
+                await calculateBatch(gpu, makeBatch(base, 1), variant);
                 for (let count = 1; count <= MAX_BATCH; count *= 2) {
                     if (deviceLost) return;
+                    if (stopRequested) throw new Error('Остановлено пользователем');
                     status.textContent = `Бенчмарк: batch=${count} / ${MAX_BATCH}`;
                     await new Promise(resolve => setTimeout(resolve, 0));
                     const start = performance.now();
-                    await calculateBatch(gpu, makeBatch(base, count));
+                    await calculateBatch(gpu, makeBatch(base, count), variant);
                     if (deviceLost) return;
+                    if (stopRequested) throw new Error('Остановлено пользователем');
                     const elapsed = performance.now() - start;
                     const rate = elapsed > 0 ? (count * 1000 / elapsed).toFixed(2) : '—';
                     out.textContent += `batch=${String(count).padStart(4)}  time=${elapsed.toFixed(2)} ms  rate=${rate} PMK/s\n`;
                 }
             } else {
-                const result = await calculateBatch(gpu, base);
+                const result = await calculateBatch(gpu, base, variant);
                 if (deviceLost) return;
+                if (stopRequested) throw new Error('Остановлено пользователем');
                 const value = hex(result.words);
                 
-                out.textContent = `PMK (32 байта):\n${value}\n\nGPU dispatch + readback:\n${result.time.toFixed(2)} ms`;
-                if (mode === 'self-test') out.textContent += '\n\nТестовый вектор совпадает.';
+                out.textContent = `${VARIANTS[variant]}\n\nPMK (32 байта):\n${value}\n\nGPU dispatch + readback:\n${result.time.toFixed(2)} ms`;
             }
             status.className = 'ok';
             status.textContent = '✓ Готово';
@@ -262,6 +454,7 @@ try {
             showError(error);
         } finally {
             busy = false;
+            document.querySelector('#stop').disabled = true;
             setDisabled(deviceLost);
         }
     }
@@ -271,6 +464,8 @@ try {
     });
     document.querySelector('#benchmark').addEventListener('click', () => { void run('benchmark'); });
     
+    document.querySelector('#compare-ad').addEventListener('click', () => { void run('compare-ad'); });
+    document.querySelector('#compare').addEventListener('click', () => { void run('compare'); });
     status.textContent = 'Готово.';
     setDisabled(false);
 } catch (error) {
