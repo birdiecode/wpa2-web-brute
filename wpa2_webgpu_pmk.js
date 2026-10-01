@@ -20,17 +20,19 @@ fn sha1_init() -> array<u32, 5> {
     return array<u32, 5>(0x67452301u, 0xefcdab89u, 0x98badcfeu, 0x10325476u, 0xc3d2e1f0u);
 }
 fn sha1_compress(stateIn: array<u32, 5>, blockIn: array<u32, 16>) -> array<u32, 5> {
-    var w: array<u32, 80>;
-    for (var i = 0u; i < 16u; i++) { w[i] = blockIn[i]; }
-    for (var i = 16u; i < 80u; i++) {
-        w[i] = rol(w[i-3u] ^ w[i-8u] ^ w[i-14u] ^ w[i-16u], 1u);
-    }
+    // SHA-1 only needs the previous 16 schedule words.
+    var w = blockIn;
     var a = stateIn[0];
     var b = stateIn[1];
     var c = stateIn[2];
     var d = stateIn[3];
     var e = stateIn[4];
     for (var i = 0u; i < 80u; i++) {
+        let j = i & 15u;
+        if (i >= 16u) {
+            w[j] = rol(w[(i - 3u) & 15u] ^ w[(i - 8u) & 15u] ^
+                       w[(i - 14u) & 15u] ^ w[j], 1u);
+        }
         var f: u32;
         var k: u32;
         if (i < 20u) {
@@ -42,7 +44,7 @@ fn sha1_compress(stateIn: array<u32, 5>, blockIn: array<u32, 16>) -> array<u32, 
         } else {
             f = b ^ c ^ d; k = 0xca62c1d6u;
         }
-        let temp = rol(a, 5u) + f + e + k + w[i];
+        let temp = rol(a, 5u) + f + e + k + w[j];
         e = d; d = c; c = rol(b, 30u); b = a; a = temp;
     }
     return array<u32, 5>(stateIn[0]+a, stateIn[1]+b, stateIn[2]+c, stateIn[3]+d, stateIn[4]+e);
