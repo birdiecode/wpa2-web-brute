@@ -286,6 +286,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 `;
 
+// Same D hot loop; only launch geometry changes. Bound input size supplies count.
+const WORKGROUP_SIZES = [1, 32, 64, 128, 256, 512];
+const GROUP_WGSL = SCALAR_WGSL
+    .replace('@compute @workgroup_size(1)',
+        'override WORKGROUP_SIZE: u32 = 32u;\n@compute @workgroup_size(WORKGROUP_SIZE)')
+    .replace('    input = inputs[id.x];',
+        '    if (id.x >= arrayLength(&inputs)) { return; }\n    input = inputs[id.x];');
+
 const VARIANTS = {
     mono80: 'A: Монолитный w[80]',
     mono16: 'B: Монолитный w[16]',
@@ -307,7 +315,12 @@ async function initWebGPU() {
     if (!navigator.gpu) throw new Error('WebGPU недоступен. Откройте страницу через HTTPS или localhost в браузере с поддержкой WebGPU.');
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) throw new Error('WebGPU adapter не найден');
-    const device = await adapter.requestDevice();
+    const groupLimit = Math.min(512, adapter.limits.maxComputeInvocationsPerWorkgroup,
+        adapter.limits.maxComputeWorkgroupSizeX);
+    const device = await adapter.requestDevice({ requiredLimits: {
+        maxComputeInvocationsPerWorkgroup: groupLimit,
+        maxComputeWorkgroupSizeX: groupLimit,
+    } });
     try {
         const bindGroupLayout = device.createBindGroupLayout({ entries: [
             { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
@@ -323,7 +336,7 @@ async function initWebGPU() {
             if (errors.length) throw new Error(errors.map(m => `${m.lineNum}:${m.linePos} ${m.message}`).join('\n'));
             for (const [name, entryPoint, constants = {}] of entries) {
                 pipelines[name] = await device.createComputePipelineAsync({
-                    layout, compute: { module, entryPoint, constants },
+                    label: name, layout, compute: { module, entryPoint, constants },
                 });
             }
         }
@@ -331,6 +344,9 @@ async function initWebGPU() {
         await compile(WGSL, [['mono16', 'main']]);
         await compile(SCALAR_WGSL, [['scalar', 'main']]);
         await compile(ILP2_WGSL, [['ilp2', 'main']]);
+        const workgroupSizes = WORKGROUP_SIZES.filter(size => size <= groupLimit);
+        await compile(GROUP_WGSL, workgroupSizes.filter(size => size > 1).map(size =>
+            [`scalar${size}`, 'main', { WORKGROUP_SIZE: size }]));
         await compile(SPLIT_WGSL, [
             ['init', 'init'], ['loop128', 'loop_chunk', { LOOP_COUNT: 128 }],
             ['loop127', 'loop_chunk', { LOOP_COUNT: 127 }], ['finish', 'finish'],
@@ -347,7 +363,7 @@ async function initWebGPU() {
                 { binding: 2, resource: { buffer: tmpBuffer } }
             ]
         });
-        return { device, pipelines, inputBuffer, outputBuffer, readBuffer, bindGroup, tmpBuffer };
+        return { device, pipelines, inputBuffer, outputBuffer, readBuffer, bindGroup, tmpBuffer, workgroupSizes };
     } catch (error) {
         device.destroy();
         throw error;
@@ -367,8 +383,11 @@ function readInput() {
     return data;
 }
 // D uses one candidate per invocation; E interleaves two. Batch counts always mean candidates.
-async function calculateBatch(gpu, data, variant = 'scalar') {
+async function calculateBatch(gpu, data, variant = 'scalar', workgroupSize = 1) {
     if (!Object.hasOwn(VARIANTS, variant)) throw new Error('Неизвестный вариант PMK');
+    if (workgroupSize !== 1 && (variant !== 'scalar' || !gpu.workgroupSizes.includes(workgroupSize))) {
+        throw new Error('Этот размер workgroup недоступен для выбранного варианта');
+    }
     const count = data.length / (INPUT_SIZE / 4);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BATCH) {
         throw new Error(`Размер batch должен быть от 1 до ${MAX_BATCH}`);
@@ -377,7 +396,7 @@ async function calculateBatch(gpu, data, variant = 'scalar') {
     device.queue.writeBuffer(inputBuffer, 0, data);
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
-    const activeBindGroup = variant === 'ilp2' ? device.createBindGroup({
+    const activeBindGroup = variant === 'ilp2' || workgroupSize > 1 ? device.createBindGroup({
         layout: pipelines.ilp2.getBindGroupLayout(0),
         entries: [
             { binding: 0, resource: { buffer: inputBuffer, size: data.byteLength } },
@@ -388,7 +407,7 @@ async function calculateBatch(gpu, data, variant = 'scalar') {
     pass.setBindGroup(0, activeBindGroup);
     const dispatch = name => {
         pass.setPipeline(pipelines[name]);
-        pass.dispatchWorkgroups(variant === 'ilp2' ? Math.ceil(count / 2) : count);
+        pass.dispatchWorkgroups(variant === 'ilp2' ? Math.ceil(count / 2) : Math.ceil(count / workgroupSize));
     };
     if (variant === 'split128') {
         dispatch('init');
@@ -398,7 +417,7 @@ async function calculateBatch(gpu, data, variant = 'scalar') {
         dispatch('loop127');
         dispatch('finish');
     } else {
-        dispatch(variant);
+        dispatch(workgroupSize > 1 ? `scalar${workgroupSize}` : variant);
     }
     pass.end();
     const byteLength = OUTPUT_SIZE * count;
@@ -479,6 +498,51 @@ async function compareVariants(gpu, base, comparison = 'all') {
         }
     }
 }
+async function compareWorkgroups(gpu, base) {
+    const count = 4096;
+    const repeats = 5;
+    const sizes = gpu.workgroupSizes;
+    const data = makeBatch(base, count);
+    const samples = Object.fromEntries(sizes.map(size => [size, []]));
+    let expected;
+    out.textContent = 'D: batch=4096, один прогрев каждого размера, 5 замеров с чередованием порядка.\n' +
+        'Время включает загрузку, команды, вычисление и чтение; компиляция и подготовка входов исключены.\n' +
+        'Все PMK сверяются с исходным D (workgroup=1) вне измерения.\n\n';
+    for (const size of WORKGROUP_SIZES.filter(size => !sizes.includes(size))) {
+        out.textContent += `workgroup=${size}: пропущен — превышает лимит адаптера.\n`;
+    }
+    const check = words => {
+        if (!expected) expected = words;
+        else if (words.some((word, i) => word !== expected[i])) throw new Error('PMK не совпали между workgroup');
+        if (stopRequested) throw new Error('Остановлено пользователем');
+    };
+    for (const size of sizes) {
+        if (stopRequested) throw new Error('Остановлено пользователем');
+        status.textContent = `Прогрев D: workgroup=${size}`;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        check((await calculateBatch(gpu, data, 'scalar', size)).words);
+    }
+    for (let round = 0; round < repeats; round++) {
+        for (let j = 0; j < sizes.length; j++) {
+            if (stopRequested) throw new Error('Остановлено пользователем');
+            const size = sizes[(j + round) % sizes.length];
+            status.textContent = `D: workgroup=${size}, замер ${round + 1}/${repeats}`;
+            await new Promise(resolve => setTimeout(resolve, 0));
+            const start = performance.now();
+            const result = await calculateBatch(gpu, data, 'scalar', size);
+            samples[size].push(performance.now() - start);
+            check(result.words);
+        }
+    }
+    for (const size of sizes) {
+        const times = samples[size];
+        const med = median(times);
+        out.textContent += `workgroup=${size}  dispatchWorkgroups=${Math.ceil(count / size)}\n` +
+            `median=${med.toFixed(2)} ms  rate=${(count * 1000 / med).toFixed(2)} PMK/s  ` +
+            `min=${Math.min(...times).toFixed(2)}  max=${Math.max(...times).toFixed(2)} ms\n` +
+            `samples: ${times.map(t => t.toFixed(2)).join(', ')} ms\n\n`;
+    }
+}
 function setDisabled(disabled) {
     buttons.forEach(button => { button.disabled = disabled; });
 }
@@ -490,6 +554,9 @@ function showError(error) {
 
 try {
     const gpu = await initWebGPU();
+    for (const option of document.querySelector('#workgroup').options) {
+        option.disabled = !gpu.workgroupSizes.includes(Number(option.value));
+    }
     let deviceLost = false;
     let busy = false;
     gpu.device.lost.then(info => {
@@ -509,19 +576,22 @@ try {
         try {
             const base = readInput();
             const variant = document.querySelector('#variant').value;
+            const workgroupSize = variant === 'scalar' ? Number(document.querySelector('#workgroup').value) : 1;
             if (mode === 'compare' || mode === 'compare-ad' || mode === 'compare-de') {
                 await compareVariants(gpu, base, mode === 'compare-ad' ? 'ad' : mode === 'compare-de' ? 'de' : 'all');
+            } else if (mode === 'workgroups') {
+                await compareWorkgroups(gpu, base);
             } else if (mode === 'benchmark') {
-                out.textContent = `${VARIANTS[variant]}\n` + 'Пароли для бенчмарка: 00000000 … 00004095; SSID из поля.\nВремя включает подготовку и загрузку данных, расчёт и чтение результата; без компиляции и выделения GPU-буферов.\n\n';
+                out.textContent = `${VARIANTS[variant]}, workgroup=${workgroupSize}\n` + 'Пароли для бенчмарка: 00000000 … 00004095; SSID из поля.\nВремя включает подготовку и загрузку данных, расчёт и чтение результата; без компиляции и выделения GPU-буферов.\n\n';
                 status.textContent = 'Прогрев...';
-                await calculateBatch(gpu, makeBatch(base, 1), variant);
+                await calculateBatch(gpu, makeBatch(base, 1), variant, workgroupSize);
                 for (let count = 1; count <= MAX_BATCH; count *= 2) {
                     if (deviceLost) return;
                     if (stopRequested) throw new Error('Остановлено пользователем');
                     status.textContent = `Бенчмарк: batch=${count} / ${MAX_BATCH}`;
                     await new Promise(resolve => setTimeout(resolve, 0));
                     const start = performance.now();
-                    await calculateBatch(gpu, makeBatch(base, count), variant);
+                    await calculateBatch(gpu, makeBatch(base, count), variant, workgroupSize);
                     if (deviceLost) return;
                     if (stopRequested) throw new Error('Остановлено пользователем');
                     const elapsed = performance.now() - start;
@@ -529,12 +599,12 @@ try {
                     out.textContent += `batch=${String(count).padStart(4)}  time=${elapsed.toFixed(2)} ms  rate=${rate} PMK/s\n`;
                 }
             } else {
-                const result = await calculateBatch(gpu, base, variant);
+                const result = await calculateBatch(gpu, base, variant, workgroupSize);
                 if (deviceLost) return;
                 if (stopRequested) throw new Error('Остановлено пользователем');
                 const value = hex(result.words);
                 
-                out.textContent = `${VARIANTS[variant]}\n\nPMK (32 байта):\n${value}\n\nGPU dispatch + readback:\n${result.time.toFixed(2)} ms`;
+                out.textContent = `${VARIANTS[variant]}, workgroup=${workgroupSize}\n\nPMK (32 байта):\n${value}\n\nGPU dispatch + readback:\n${result.time.toFixed(2)} ms`;
             }
             status.className = 'ok';
             status.textContent = '✓ Готово';
@@ -552,6 +622,7 @@ try {
     });
     document.querySelector('#benchmark').addEventListener('click', () => { void run('benchmark'); });
     
+    document.querySelector('#workgroups').addEventListener('click', () => { void run('workgroups'); });
     document.querySelector('#compare-de').addEventListener('click', () => { void run('compare-de'); });
     document.querySelector('#compare-ad').addEventListener('click', () => { void run('compare-ad'); });
     document.querySelector('#compare').addEventListener('click', () => { void run('compare'); });

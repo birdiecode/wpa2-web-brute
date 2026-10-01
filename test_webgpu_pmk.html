@@ -29,6 +29,12 @@
       <option value="scalar" selected>D: Монолитный scalar/unrolled (baseline)</option>
       <option value="ilp2">E: Scalar/unrolled, 2 кандидата на invocation</option>
     </select></label>
+    <label>Workgroup для D: <select id="workgroup" disabled>
+      <option value="1">1 (исходный baseline)</option>
+      <option value="32">32</option><option value="64">64</option>
+      <option value="128">128</option><option value="256">256</option>
+      <option value="512">512</option>
+    </select></label>
     <label>Повторов для сравнения: <select id="repeats" disabled>
       <option value="5">5</option><option value="10">10</option>
     </select></label>
@@ -37,8 +43,10 @@
     <button id="compare" type="button" disabled>Сравнить варианты: 512 / 1024 / 4096</button>
     <button id="compare-ad" type="button" disabled>Сравнить A / D: batch 4096</button>
     <button id="compare-de" type="button" disabled>Сравнить D / E: batch 4096</button>
+    <button id="workgroups" type="button" disabled>Сравнить workgroup D: 5 замеров, batch 4096</button>
     <button id="stop" type="button" disabled>Остановить после расчёта</button>
   </form>
+  <p>Выбор workgroup применяется к расчёту D и его бенчмарку 1–4096. Сравнения A–E сохраняют исходные размеры workgroup.</p>
   <p id="status" role="status" aria-live="polite">Инициализация WebGPU...</p>
   <pre id="out">Ожидание...</pre>
   <script type="text/javascript" src="wpa2_webgpu_pmk.js"></script>
