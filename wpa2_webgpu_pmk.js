@@ -208,11 +208,90 @@ fn hmac20(innerBase: array<u32, 5>, outerBase: array<u32, 5>, msg: array<u32, 5>
 }
 ` + WGSL80.slice(WGSL80.indexOf('fn pbkdf2_u1('));
 
+// Two independent scalar SHA-1 streams, interleaved round by round.
+// This exposes ILP; two complete sequential PBKDF2 calls would not do that.
+function generateSHA120Pair() {
+    const lines = [`struct DigestPair { left: array<u32, 5>, right: array<u32, 5>, }
+fn sha1_20_pair(s0: array<u32, 5>, s1: array<u32, 5>, m0: array<u32, 5>, m1: array<u32, 5>) -> DigestPair {`];
+    for (let lane = 0; lane < 2; lane++) {
+        for (let i = 0; i < 16; i++) {
+            const value = i < 5 ? `m${lane}[${i}]` : i === 5 ? '0x80000000u' : i === 15 ? '672u' : '0u';
+            lines.push(`    var w${lane}_${i}: u32 = ${value};`);
+        }
+        for (const [i, name] of ['a', 'b', 'c', 'd', 'e'].entries()) {
+            lines.push(`    var ${name}${lane} = s${lane}[${i}];`);
+        }
+    }
+    for (let i = 0; i < 80; i++) {
+        for (let lane = 0; lane < 2; lane++) {
+            const w = n => `w${lane}_${n & 15}`;
+            if (i >= 16) lines.push(`    ${w(i)} = rol(${w(i-3)} ^ ${w(i-8)} ^ ${w(i-14)} ^ ${w(i)}, 1u);`);
+            const b = `b${lane}`, c = `c${lane}`, d = `d${lane}`;
+            const f = i < 20 ? `((${b} & ${c}) | ((~${b}) & ${d}))` : i < 40 ? `(${b} ^ ${c} ^ ${d})` :
+                i < 60 ? `((${b} & ${c}) | (${b} & ${d}) | (${c} & ${d}))` : `(${b} ^ ${c} ^ ${d})`;
+            const k = ['0x5a827999u', '0x6ed9eba1u', '0x8f1bbcdcu', '0xca62c1d6u'][Math.floor(i / 20)];
+            lines.push(`    { // Round ${i}, candidate ${lane}
+        let next = rol(a${lane}, 5u) + ${f} + e${lane} + ${k} + ${w(i)};
+        e${lane} = d${lane}; d${lane} = c${lane}; c${lane} = rol(b${lane}, 30u); b${lane} = a${lane}; a${lane} = next;
+    }`);
+        }
+    }
+    lines.push('    return DigestPair(');
+    for (let lane = 0; lane < 2; lane++) {
+        const words = ['a', 'b', 'c', 'd', 'e'].map((name, i) => `s${lane}[${i}]+${name}${lane}`);
+        lines.push(`        array<u32, 5>(${words.join(', ')})${lane === 0 ? ',' : ''}`);
+    }
+    lines.push('    );', '}');
+    return lines.join('\n');
+}
+const ILP2_WGSL = SCALAR_WGSL.slice(0, SCALAR_WGSL.indexOf('@compute @workgroup_size(1)')) +
+    generateSHA120Pair() + /* wgsl */ `
+fn pbkdf2_pair(ip0: array<u32, 5>, op0: array<u32, 5>, ip1: array<u32, 5>, op1: array<u32, 5>,
+               first0: array<u32, 5>, first1: array<u32, 5>) -> DigestPair {
+    var u = DigestPair(first0, first1);
+    var t = u;
+    for (var i = 1u; i < 4096u; i++) {
+        let inner = sha1_20_pair(ip0, ip1, u.left, u.right);
+        u = sha1_20_pair(op0, op1, inner.left, inner.right);
+        for (var j = 0u; j < 5u; j++) {
+            t.left[j] ^= u.left[j];
+            t.right[j] ^= u.right[j];
+        }
+    }
+    return t;
+}
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let first = id.x * 2u;
+    // Input binding is limited to the actual batch, not the buffer capacity.
+    let second = min(first + 1u, arrayLength(&inputs) - 1u);
+    input = inputs[first];
+    let ip0 = hmac_state(0x36363636u);
+    let op0 = hmac_state(0x5c5c5c5cu);
+    let u10 = pbkdf2_u1(ip0, op0, 1u);
+    let u20 = pbkdf2_u1(ip0, op0, 2u);
+    input = inputs[second];
+    let ip1 = hmac_state(0x36363636u);
+    let op1 = hmac_state(0x5c5c5c5cu);
+    let u11 = pbkdf2_u1(ip1, op1, 1u);
+    let u21 = pbkdf2_u1(ip1, op1, 2u);
+    let t1 = pbkdf2_pair(ip0, op0, ip1, op1, u10, u11);
+    let t2 = pbkdf2_pair(ip0, op0, ip1, op1, u20, u21);
+    for (var k = 0u; k < 5u; k++) { outputs[first].pmk[k] = t1.left[k]; }
+    for (var k = 0u; k < 3u; k++) { outputs[first].pmk[5u+k] = t2.left[k]; }
+    if (second != first) {
+        for (var k = 0u; k < 5u; k++) { outputs[second].pmk[k] = t1.right[k]; }
+        for (var k = 0u; k < 3u; k++) { outputs[second].pmk[5u+k] = t2.right[k]; }
+    }
+}
+`;
+
 const VARIANTS = {
     mono80: 'A: Монолитный w[80]',
     mono16: 'B: Монолитный w[16]',
     split128: 'C: init → loop(128) → final, w[16]',
-    scalar: 'D: Монолитный scalar/unrolled',
+    scalar: 'D: Монолитный scalar/unrolled (baseline)',
+    ilp2: 'E: Scalar/unrolled, 2 кандидата на invocation',
 };
 
 const INPUT_SIZE = 164;
@@ -251,6 +330,7 @@ async function initWebGPU() {
         await compile(WGSL80, [['mono80', 'main']]);
         await compile(WGSL, [['mono16', 'main']]);
         await compile(SCALAR_WGSL, [['scalar', 'main']]);
+        await compile(ILP2_WGSL, [['ilp2', 'main']]);
         await compile(SPLIT_WGSL, [
             ['init', 'init'], ['loop128', 'loop_chunk', { LOOP_COUNT: 128 }],
             ['loop127', 'loop_chunk', { LOOP_COUNT: 127 }], ['finish', 'finish'],
@@ -286,21 +366,29 @@ function readInput() {
     data[40] = ssid.length;
     return data;
 }
-// One invocation per candidate. Split mode keeps all intermediate state on the GPU.
-async function calculateBatch(gpu, data, variant = 'split128') {
+// D uses one candidate per invocation; E interleaves two. Batch counts always mean candidates.
+async function calculateBatch(gpu, data, variant = 'scalar') {
     if (!Object.hasOwn(VARIANTS, variant)) throw new Error('Неизвестный вариант PMK');
     const count = data.length / (INPUT_SIZE / 4);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BATCH) {
         throw new Error(`Размер batch должен быть от 1 до ${MAX_BATCH}`);
     }
-    const { device, pipelines, inputBuffer, outputBuffer, readBuffer, bindGroup } = gpu;
+    const { device, pipelines, inputBuffer, outputBuffer, readBuffer, bindGroup, tmpBuffer } = gpu;
     device.queue.writeBuffer(inputBuffer, 0, data);
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
-    pass.setBindGroup(0, bindGroup);
+    const activeBindGroup = variant === 'ilp2' ? device.createBindGroup({
+        layout: pipelines.ilp2.getBindGroupLayout(0),
+        entries: [
+            { binding: 0, resource: { buffer: inputBuffer, size: data.byteLength } },
+            { binding: 1, resource: { buffer: outputBuffer } },
+            { binding: 2, resource: { buffer: tmpBuffer } },
+        ],
+    }) : bindGroup;
+    pass.setBindGroup(0, activeBindGroup);
     const dispatch = name => {
         pass.setPipeline(pipelines[name]);
-        pass.dispatchWorkgroups(count);
+        pass.dispatchWorkgroups(variant === 'ilp2' ? Math.ceil(count / 2) : count);
     };
     if (variant === 'split128') {
         dispatch('init');
@@ -343,16 +431,16 @@ function median(values) {
     const mid = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
-async function compareVariants(gpu, base, onlyAD = false) {
+async function compareVariants(gpu, base, comparison = 'all') {
     const repeats = Number(document.querySelector('#repeats').value);
-    const variants = onlyAD ? ['mono80', 'scalar'] : Object.keys(VARIANTS);
+    const variants = comparison === 'ad' ? ['mono80', 'scalar'] : comparison === 'de' ? ['scalar', 'ilp2'] : Object.keys(VARIANTS);
     out.textContent = `Сравнение: ${repeats} замеров после одного прогрева каждого варианта на каждом batch.\n` +
         'Время: загрузка, кодирование команд, вычисление, чтение; данные подготовлены заранее.\n' +
         'Порядок вариантов чередуется. Результаты каждого запуска сверяются целиком.\n\n';
     const checkStop = () => {
         if (stopRequested) throw new Error('Остановлено пользователем');
     };
-    for (const count of (onlyAD ? [4096] : [512, 1024, 4096])) {
+    for (const count of (comparison === 'all' ? [512, 1024, 4096] : [4096])) {
         const data = makeBatch(base, count);
         const samples = Object.fromEntries(variants.map(v => [v, []]));
         let expected;
@@ -421,8 +509,8 @@ try {
         try {
             const base = readInput();
             const variant = document.querySelector('#variant').value;
-            if (mode === 'compare' || mode === 'compare-ad') {
-                await compareVariants(gpu, base, mode === 'compare-ad');
+            if (mode === 'compare' || mode === 'compare-ad' || mode === 'compare-de') {
+                await compareVariants(gpu, base, mode === 'compare-ad' ? 'ad' : mode === 'compare-de' ? 'de' : 'all');
             } else if (mode === 'benchmark') {
                 out.textContent = `${VARIANTS[variant]}\n` + 'Пароли для бенчмарка: 00000000 … 00004095; SSID из поля.\nВремя включает подготовку и загрузку данных, расчёт и чтение результата; без компиляции и выделения GPU-буферов.\n\n';
                 status.textContent = 'Прогрев...';
@@ -464,6 +552,7 @@ try {
     });
     document.querySelector('#benchmark').addEventListener('click', () => { void run('benchmark'); });
     
+    document.querySelector('#compare-de').addEventListener('click', () => { void run('compare-de'); });
     document.querySelector('#compare-ad').addEventListener('click', () => { void run('compare-ad'); });
     document.querySelector('#compare').addEventListener('click', () => { void run('compare'); });
     status.textContent = 'Готово.';

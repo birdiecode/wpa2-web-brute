@@ -26,7 +26,8 @@
       <option value="split128">C: init → loop(128) → final, w[16]</option>
       <option value="mono80">A: Монолитный w[80]</option>
       <option value="mono16">B: Монолитный w[16]</option>
-      <option value="scalar">D: Монолитный scalar/unrolled</option>
+      <option value="scalar" selected>D: Монолитный scalar/unrolled (baseline)</option>
+      <option value="ilp2">E: Scalar/unrolled, 2 кандидата на invocation</option>
     </select></label>
     <label>Повторов для сравнения: <select id="repeats" disabled>
       <option value="5">5</option><option value="10">10</option>
@@ -35,6 +36,7 @@
     <button id="benchmark" type="button" disabled>Бенчмарк batch 1–4096</button>
     <button id="compare" type="button" disabled>Сравнить варианты: 512 / 1024 / 4096</button>
     <button id="compare-ad" type="button" disabled>Сравнить A / D: batch 4096</button>
+    <button id="compare-de" type="button" disabled>Сравнить D / E: batch 4096</button>
     <button id="stop" type="button" disabled>Остановить после расчёта</button>
   </form>
   <p id="status" role="status" aria-live="polite">Инициализация WebGPU...</p>
