@@ -81,6 +81,11 @@ const groupWGSL = scalarWGSL
     .replace('@compute @workgroup_size(1)', 'override WORKGROUP_SIZE: u32 = 256u;\n@compute @workgroup_size(WORKGROUP_SIZE)');
 
 class WebGPUMIC {
+    // Full PTK records have a 64-byte stride; only words 0..3 are KCK.
+    static get ptkShader() {
+        return groupWGSL.replace('struct Key { words: array<u32, 4>, }',
+            'struct Key { words: array<u32, 16>, }');
+    }
     static async create(options = {}) {
         if (!navigator.gpu) throw new Error('WebGPU недоступен; используйте поддерживаемый браузер через HTTPS или localhost.');
         const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });

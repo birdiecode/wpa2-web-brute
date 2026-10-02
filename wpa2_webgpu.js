@@ -6,14 +6,12 @@ const vector = {
     ssid: 'Test_WiFi',
     keyData: '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b',
     message: '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f',
-    pmk: 'e4a5c4c71b86171f29c19bd0ed6ef0217a32f402ace8066ec5dab52456843c37',
-    ptk: '53a67a28658402b0d50a1c121ba5462a22575f50fc02d10f6041bf2dd5ea024dc01f27922387be818f29fca711598092f47677806a6f7517487d9e82117aa27d',
     mic: 'f955d7dba6bd85b2560cf3f9d8a501e8',
 };
 const $ = selector => document.querySelector(selector);
 const out = $('#out');
 const status = $('#status');
-const controls = document.querySelectorAll('button:not(#stop)');
+const controls = document.querySelectorAll('button:not(#stop), select');
 let chain;
 let chainPromise;
 let busy = false;
@@ -35,24 +33,13 @@ function hex(bytes) { return Array.from(bytes, byte => byte.toString(16).padStar
 
 async function ensureChain() {
     if (chain) return chain;
-    if (chainPromise) return chainPromise;
-    chainPromise = (async () => {
-        const parts = [];
-        try {
-            status.textContent = 'Компиляция PMK shader…';
-            const pmk = await WebGPUPMK.create(); parts.push(pmk);
-            status.textContent = 'Компиляция PTK shader…';
-            const ptk = await WebGPUPTK.create(); parts.push(ptk);
-            status.textContent = 'Компиляция MIC shader…';
-            const mic = await WebGPUMIC.create({ lite: true }); parts.push(mic);
-            chain = { pmk, ptk, mic };
-            return chain;
-        } catch (error) {
-            for (const part of parts) { try { part.dispose(); } catch (_) {} }
-            chainPromise = null;
-            throw error;
-        }
-    })();
+    if (!chainPromise) {
+        status.textContent = 'Компиляция трёх shader для одного GPUDevice…';
+        chainPromise = WPA2WebGPU.create().then(value => {
+            chain = value;
+            return value;
+        }).catch(error => { chainPromise = null; throw error; });
+    }
     return chainPromise;
 }
 
@@ -75,17 +62,55 @@ function readInputs(useVector = false) {
 async function derive(passwords, ssid, keyData, message, onStage = () => {}) {
     const gpu = await ensureChain();
     if (stopRequested) throw new Error('Остановлено пользователем');
-    onStage('PBKDF2: генерация PMK…');
-    const pmkResult = await gpu.pmk.calculate(passwords, ssid);
-    if (stopRequested) throw new Error('Остановлено пользователем');
-    onStage('PRF-512: генерация PTK…');
-    const ptkResult = await gpu.ptk.calculate(pmkResult.pmks, keyData);
-    if (stopRequested) throw new Error('Остановлено пользователем');
-    onStage('HMAC-SHA1: расчёт MIC…');
-    const kcks = ptkResult.ptks.map(ptk => ptk.slice(0, 16));
-    const micResult = await gpu.mic.calculate(kcks, message, 'scalar', gpu.mic.defaultWorkgroupSize);
-    return { pmks: pmkResult.pmks, ptks: ptkResult.ptks, mics: micResult.mics,
-        stageTimes: [pmkResult.time, ptkResult.time, micResult.time] };
+    onStage('PMK → PTK → MIC на GPU…');
+    return gpu.derive(passwords, ssid, keyData, message);
+}
+
+async function benchmarkLarge(input) {
+    const gpu = await ensureChain();
+    const repeats = Number($('#repeats').value);
+    if (![5, 10].includes(repeats)) throw new Error('Выберите 5 или 10 прогонов');
+    const sizes = [4096, 8192, 16384, 32768].filter(n => n <= gpu.maxBatch);
+    if (!sizes.length) throw new Error('Лимиты GPU не позволяют batch 4096');
+    const cases = sizes.map(count => ({
+        count, passwords: Array.from({ length: count }, (_, i) => String(10000000 + i)),
+        samples: [], expected: null,
+    }));
+    out.textContent = `Полная цепочка, ${repeats} прогонов после прогрева каждого batch.\n` +
+        'Порядок batch чередуется. Время: упаковка входов, upload, три dispatch и один readback MIC.\n' +
+        'Создание паролей, компиляция и проверка результатов исключены. Все MIC сверяются с прогревом.\n\n';
+    for (const n of [4096, 8192, 16384, 32768].filter(n => n > gpu.maxBatch))
+        out.textContent += `batch=${n}: пропущен, лимит GPU ${gpu.maxBatch}\n`;
+    for (const item of cases) {
+        if (stopRequested) throw new Error('Остановлено пользователем');
+        status.textContent = `Прогрев batch=${item.count}`;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        item.expected = (await derive(item.passwords, input.ssid, input.keyData, input.message)).mics;
+    }
+    for (let round = 0; round < repeats; round++) {
+        for (let j = 0; j < cases.length; j++) {
+            if (stopRequested) throw new Error('Остановлено пользователем');
+            const item = cases[(j + round) % cases.length];
+            status.textContent = `batch=${item.count}, прогон ${round + 1}/${repeats}`;
+            await new Promise(resolve => setTimeout(resolve, 0));
+            const start = performance.now();
+            const result = await derive(item.passwords, input.ssid, input.keyData, input.message);
+            const elapsed = performance.now() - start;
+            if (result.mics.length !== item.expected.length ||
+                result.mics.some((mic, i) => mic.some((byte, k) => byte !== item.expected[i][k])))
+                throw new Error(`MIC не совпали с прогревом при batch=${item.count}`);
+            item.samples.push(elapsed);
+            out.textContent += `batch=${item.count}  прогон=${round + 1}  ${elapsed.toFixed(2)} ms\n`;
+        }
+    }
+    out.textContent += '\nМедианы полной цепочки:\n';
+    for (const item of cases) {
+        const sorted = [...item.samples].sort((a, b) => a - b);
+        const middle = Math.floor(sorted.length / 2);
+        const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+        out.textContent += `batch=${item.count}  median=${median.toFixed(2)} ms  rate=${(item.count * 1000 / median).toFixed(2)} цепочек/s  min=${sorted[0].toFixed(2)}  max=${sorted.at(-1).toFixed(2)} ms\n` +
+            `samples: ${item.samples.map(n => n.toFixed(2)).join(', ')} ms\n\n`;
+    }
 }
 
 function setBusy(value) {
@@ -98,11 +123,13 @@ async function run(mode) {
     status.className = ''; out.textContent = '';
     try {
         const input = readInputs(mode === 'self-test');
-        if (mode === 'benchmark') {
+        if (mode === 'large-benchmark') {
+            await benchmarkLarge(input);
+        } else if (mode === 'benchmark') {
             const password0 = '10000000';
             status.textContent = 'Прогрев полной цепочки…';
             await derive([password0], input.ssid, input.keyData, input.message);
-            out.textContent = 'Одна цепочка на пароль; время включает подготовку, загрузку, три WebGPU dispatch/readback. Компиляция shader исключена.\n\n';
+            out.textContent = 'Одна цепочка на пароль; время включает подготовку, загрузку, три WebGPU dispatch и один readback итогового MIC. Компиляция shader исключена.\n\n';
             for (let count = 1; count <= 4096; count *= 2) {
                 if (stopRequested) throw new Error('Остановлено пользователем');
                 const passwords = Array.from({ length: count }, (_, i) => String(10000000 + i));
@@ -120,11 +147,8 @@ async function run(mode) {
             const start = performance.now();
             const result = await derive([input.password], input.ssid, input.keyData, input.message,
                 text => { status.textContent = text; });
-            if (mode === 'self-test' && hex(result.pmks[0]) !== vector.pmk) throw new Error(`Тестовый PMK не совпал: ${hex(result.pmks[0])}`);
-            if (mode === 'self-test' && hex(result.ptks[0]) !== vector.ptk) throw new Error(`Тестовый PTK не совпал: ${hex(result.ptks[0])}`);
             const mic = hex(result.mics[0]);
-            out.textContent = `PMK (32 байта):\n${hex(result.pmks[0])}\n\nPTK (64 байта):\n${hex(result.ptks[0])}` +
-                `\n\nMIC (16 байт):\n${mic}\n\nВремя этапов, ms — PMK ${result.stageTimes[0].toFixed(2)}, PTK ${result.stageTimes[1].toFixed(2)}, MIC ${result.stageTimes[2].toFixed(2)}\n` +
+            out.textContent = `MIC (16 байт):\n${mic}\n\n` +
                 `Полная цепочка: ${(performance.now() - start).toFixed(2)} ms (shader init: ${initTime.toFixed(2)} ms, отдельно)`;
             if (mode === 'self-test') {
                 out.textContent = `Ожидаемый MIC:\n${vector.mic}\n\n` + out.textContent;
@@ -140,9 +164,10 @@ async function run(mode) {
 
 $('#wpa2-form').addEventListener('submit', event => { event.preventDefault(); void run('single'); });
 $('#self-test').addEventListener('click', () => void run('self-test'));
+$('#large-benchmark').addEventListener('click', () => void run('large-benchmark'));
 $('#benchmark').addEventListener('click', () => void run('benchmark'));
 window.addEventListener('pagehide', () => {
     if (!chain) return;
-    chain.pmk.dispose(); chain.ptk.dispose(); chain.mic.dispose(); chain = null;
+    chain.dispose(); chain = null; chainPromise = null;
 });
 })();

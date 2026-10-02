@@ -1,10 +1,10 @@
 (async () => {
 'use strict';
 
-// PBKDF2-HMAC-SHA1: 4096 iterations, 32-byte PMK, fixed 8-byte password.
+// PBKDF2-HMAC-SHA1: 4096 iterations, 32-byte PMK, 8–63-byte UTF-8 password.
 const WGSL = /* wgsl */ `
 struct Input {
-    password: array<u32, 8>,
+    password: array<u32, 64>,
     ssid: array<u32, 32>,
     ssidLen: u32,
 }
@@ -54,7 +54,7 @@ fn sha1_compress(stateIn: array<u32, 5>, blockIn: array<u32, 16>) -> array<u32, 
 fn hmac_state(pad: u32) -> array<u32, 5> {
     var block: array<u32, 16>;
     for (var i = 0u; i < 16u; i++) { block[i] = pad; }
-    for (var i = 0u; i < 8u; i++) {
+    for (var i = 0u; i < 64u; i++) {
         let word = i >> 2u;
         let shift = 24u - ((i & 3u) * 8u);
         block[word] = block[word] ^ (input.password[i] << shift);
@@ -302,7 +302,7 @@ const VARIANTS = {
     ilp2: 'E: Scalar/unrolled, 2 кандидата на invocation',
 };
 
-const INPUT_SIZE = 164;
+const INPUT_SIZE = (64 + 32 + 1) * 4; // 388 bytes
 const OUTPUT_SIZE = 32;
 const MAX_BATCH = 4096;
 const standaloneUI = !!document.querySelector('#pmk-form');
@@ -382,12 +382,12 @@ function packInput(password, ssidText) {
     if (typeof password !== 'string' || typeof ssidText !== 'string') throw new TypeError('Пароль и SSID должны быть строками');
     const pw = enc.encode(password);
     const ssid = enc.encode(ssidText);
-    if (pw.length !== 8) throw new Error('Пароль должен быть ровно 8 байт UTF-8');
+    if (pw.length < 8 || pw.length > 63) throw new Error('Пароль должен быть 8–63 байта UTF-8');
     if (ssid.length < 1 || ssid.length > 32) throw new Error('SSID должен быть 1..32 байта UTF-8');
     const data = new Uint32Array(INPUT_SIZE / 4);
     data.set(pw);
-    data.set(ssid, 8);
-    data[40] = ssid.length;
+    data.set(ssid, 64);
+    data[96] = ssid.length;
     return data;
 }
 function readInput() { return packInput(document.querySelector('#password').value, document.querySelector('#ssid').value); }
@@ -451,6 +451,7 @@ function makeBatch(base, count) {
     for (let i = 0; i < count; i++) {
         const offset = i * stride;
         data.set(base, offset);
+        data.fill(0, offset, offset + 64);
         data.set(new TextEncoder().encode(String(i).padStart(8, '0')), offset);
     }
     return data;
@@ -555,6 +556,8 @@ async function compareWorkgroups(gpu, base) {
 }
 if (!standaloneUI) {
     globalThis.WebGPUPMK = {
+        shader: GROUP_WGSL,
+        inputSize: INPUT_SIZE,
         async create() {
             const gpu = await initWebGPU(true);
             return {

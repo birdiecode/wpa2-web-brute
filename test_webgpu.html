@@ -19,7 +19,7 @@
 <body>
   <h1>WPA2 PMK → PTK → MIC — WebGPU</h1>
   <p>Полная цепочка: PBKDF2-HMAC-SHA1 (4096 итераций) → WPA2 PRF-512 → HMAC-SHA1 MIC (первые 16 байт).</p>
-  <p>Пароль — ровно 8 байт UTF-8; SSID — 1–32 байта UTF-8. keyData (76 байт) = min(AP, STA) || max(AP, STA) || min(ANonce, SNonce) || max(ANonce, SNonce). EAPOL передавайте как hex с обнулённым MIC field.</p>
+  <p>Пароль — 8–63 байта UTF-8; SSID — 1–32 байта UTF-8. keyData (76 байт) = min(AP, STA) || max(AP, STA) || min(ANonce, SNonce) || max(ANonce, SNonce). EAPOL передавайте как hex с обнулённым MIC field.</p>
   <form id="wpa2-form">
     <label>Пароль: <input id="password" type="text" required></label>
     <label>SSID: <input id="ssid" type="text" required></label>
@@ -30,14 +30,17 @@
     <button id="run" type="submit">Вычислить PMK → PTK → MIC</button>
     <button id="self-test" type="button">Проверить полный тестовый вектор</button>
     <button id="benchmark" type="button">Бенчмарк полной цепочки, batch 1–4096</button>
-    <button id="stop" type="button" disabled>Остановить после текущего этапа</button>
+    <label>Прогонов больших batch: <select id="repeats"><option value="5">5</option><option value="10">10</option></select></label>
+    <button id="large-benchmark" type="button">Сравнить 4096 / 8192 / 16384 / 32768</button>
+    <button id="stop" type="button" disabled>Остановить после текущей цепочки</button>
   </form>
-  <p>Используются оптимизированные scalar/unrolled SHA-1 варианты; промежуточные PMK/PTK выводятся для проверки. Self-test использует отдельный синтетический вектор и не меняет поля.</p>
+  <p>Используются оптимизированные scalar/unrolled SHA-1 варианты; PMK и PTK остаются на GPU, считывается только MIC. Self-test использует отдельный синтетический вектор и не меняет поля.</p>
   <p id="status" role="status" aria-live="polite">Готово к запуску WebGPU.</p>
   <pre id="out">Ожидание...</pre>
   <script type="text/javascript" src="./wpa2_webgpu_pmk.js"></script>
   <script type="text/javascript" src="./wpa2_webgpu_ptk.js"></script>
   <script type="text/javascript" src="./wpa2_webgpu_mic.js"></script>
+  <script type="text/javascript" src="./wpa2_webgpu_chain.js"></script>
   <script type="text/javascript" src="./wpa2_webgpu.js"></script>
 </body>
 </html>

@@ -248,6 +248,12 @@ async function calculateBatch(gpu, data, variant = 'scalar', workgroupSize = 32)
 }
 if (!standaloneUI) {
     globalThis['WebGPUPTK'] = {
+        // PMK output records are consumed directly; the PRF message is shared.
+        shader: GROUP_WGSL
+            .replace('    message: array<u32, 32>,', '')
+            .replace('var<private> input: Input;',
+                'var<private> input: Input;\nstruct Message { words: array<u32, 32>, }\n@group(0) @binding(2) var<storage, read> sharedMessage: Message;')
+            .replaceAll('input.message[', 'sharedMessage.words['),
         async create() {
             const gpu = await initWebGPU(true);
             const workgroupSize = gpu.workgroupSizes.includes(256) ? 256 : gpu.workgroupSizes[gpu.workgroupSizes.length - 1];
