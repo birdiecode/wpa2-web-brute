@@ -197,6 +197,27 @@ void main() {
  *
  * ============================================================
  */
+// Generate static rounds once at script load; no schedule array or round loop on GPU.
+function generateWebGLSHA120() {
+  const lines = ['void sha20(inout uvec4 h, inout uint he, uvec4 m, uint me) {'];
+  for (let i = 0; i < 16; i++) {
+    const value = i < 4 ? 'm.' + 'xyzw'[i] : i === 4 ? 'me' :
+      i === 5 ? '0x80000000u' : i === 15 ? '672u' : '0u';
+    lines.push(`uint w${i} = ${value};`);
+  }
+  lines.push('uint a=h.x, b=h.y, c=h.z, d=h.w, e=he;');
+  for (let i = 0; i < 80; i++) {
+    const w = n => 'w' + (n & 15);
+    if (i >= 16) lines.push(`${w(i)} = rol(${w(i-3)} ^ ${w(i-8)} ^ ${w(i-14)} ^ ${w(i)}, 1u);`);
+    const f = i < 20 ? '((b & c) | ((~b) & d))' : i < 40 ? '(b ^ c ^ d)' :
+      i < 60 ? '((b & c) | (b & d) | (c & d))' : '(b ^ c ^ d)';
+    const k = ['0x5a827999u','0x6ed9eba1u','0x8f1bbcdcu','0xca62c1d6u'][Math.floor(i/20)];
+    lines.push(`{ uint t = rol(a,5u) + ${f} + e + ${k} + ${w(i)};
+      e=d; d=c; c=rol(b,30u); b=a; a=t; }`);
+  }
+  lines.push('h += uvec4(a,b,c,d); he += e;', '}');
+  return lines.join('\n');
+}
 const FS = `#version 300 es
 precision highp float;
 precision highp int;
@@ -298,329 +319,65 @@ void shaInit(
     );
     e = 0xC3D2E1F0u;
 }
-/*
- * ============================================================
- * HMAC-SHA1(password, SSID || INT(block))
- *
- * Password = 8–63 байта, дополненные нулями до 64 байт
- * ============================================================
- */
-void hmacPwdSalt(
-    uint key[16],
-    uint block,
-    out uvec4 dh,
-    out uint de
-) {
+
+// The fixed 20-byte HMAC message includes the already processed 64-byte key block.
+${generateWebGLSHA120()}
+
+void keyState(uint key[16], uint pad, out uvec4 h, out uint e) {
     uint W[80];
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    /*
-     * ipad
-     */
-    for (int i = 0; i < 16; i++)
-        W[i] = key[i] ^ 0x36363636u;
-    uvec4 h;
-    uint e;
-    shaInit(h, e);
-    shaBlock(
-        h,
-        e,
-        W
-    );
-    /*
-     * SSID || INT(block)
-     */
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    for (int i = 0; i < 32; i++) {
-        if (uint(i) < uSsidLen) {
-            uint wi =
-                uint(i) >> 2u;
-            uint sh =
-                24u -
-                8u *
-                (uint(i) & 3u);
-            W[int(wi)] |=
-                (uSsid[i] & 255u)
-                << sh;
-        }
-    }
-    uint p = uSsidLen;
-    /*
-     * PBKDF2 block number
-     *
-     * big endian uint32
-     */
-    for (int j = 0; j < 4; j++) {
-        uint v =
-            (
-                block >>
-                (uint(3 - j) * 8u)
-            ) & 255u;
-        uint q =
-            p +
-            uint(j);
-        W[int(q >> 2u)] |=
-            v <<
-            (
-                24u -
-                8u *
-                (q & 3u)
-            );
-    }
-    uint ml =
-        p + 4u;
-    uint q =
-        ml;
-    /*
-     * SHA padding
-     */
-    W[int(q >> 2u)] |=
-        0x80u <<
-        (
-            24u -
-            8u *
-            (q & 3u)
-        );
-    W[15] =
-        (64u + ml) *
-        8u;
-    shaBlock(
-        h,
-        e,
-        W
-    );
-    /*
-     * outer HMAC
-     */
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    for (int i = 0; i < 16; i++)
-        W[i] = key[i] ^ 0x5c5c5c5cu;
-    uvec4 oh;
-    uint oe;
-    shaInit(
-        oh,
-        oe
-    );
-    shaBlock(
-        oh,
-        oe,
-        W
-    );
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    W[0] = h.x;
-    W[1] = h.y;
-    W[2] = h.z;
-    W[3] = h.w;
-    W[4] = e;
-    W[5] =
-        0x80000000u;
-    W[15] =
-        (64u + 20u) *
-        8u;
-    shaBlock(
-        oh,
-        oe,
-        W
-    );
-    dh = oh;
-    de = oe;
+    for (int i=0; i<16; i++) W[i] = key[i] ^ pad;
+    shaInit(h,e);
+    shaBlock(h,e,W);
 }
-/*
- * ============================================================
- * HMAC(password, previous U)
- *
- * previous U = SHA1 = 20 bytes
- * ============================================================
- */
-void hmacPwd20(
-    uint key[16],
-    uvec4 m,
-    uint me,
-    out uvec4 dh,
-    out uint de
-) {
+void pbkdfBlock(uvec4 ip, uint ie, uvec4 op, uint oe,
+               uint blockIndex, out uvec4 result, out uint tail) {
     uint W[80];
-    /*
-     * inner key
-     */
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    for (int i = 0; i < 16; i++)
-        W[i] = key[i] ^ 0x36363636u;
-    uvec4 h;
-    uint e;
-    shaInit(
-        h,
-        e
-    );
-    shaBlock(
-        h,
-        e,
-        W
-    );
-    /*
-     * previous SHA1 result
-     */
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    W[0] = m.x;
-    W[1] = m.y;
-    W[2] = m.z;
-    W[3] = m.w;
-    W[4] = me;
-    W[5] =
-        0x80000000u;
-    W[15] =
-        (64u + 20u) *
-        8u;
-    shaBlock(
-        h,
-        e,
-        W
-    );
-    /*
-     * outer
-     */
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    for (int i = 0; i < 16; i++)
-        W[i] = key[i] ^ 0x5c5c5c5cu;
-    uvec4 oh;
-    uint oe;
-    shaInit(
-        oh,
-        oe
-    );
-    shaBlock(
-        oh,
-        oe,
-        W
-    );
-    for (int i = 0; i < 80; i++)
-        W[i] = 0u;
-    W[0] = h.x;
-    W[1] = h.y;
-    W[2] = h.z;
-    W[3] = h.w;
-    W[4] = e;
-    W[5] =
-        0x80000000u;
-    W[15] =
-        (64u + 20u) *
-        8u;
-    shaBlock(
-        oh,
-        oe,
-        W
-    );
-    dh = oh;
-    de = oe;
-}
-/*
- * ============================================================
- * Один PBKDF2 block
- * ============================================================
- */
-void pbkdfBlock(
-    uint key[16],
-    uint block,
-    out uvec4 r,
-    out uint re
-) {
-    uvec4 u;
-    uint ue;
-    /*
-     * U1
-     */
-    hmacPwdSalt(
-        key,
-        block,
-        u,
-        ue
-    );
-    r = u;
-    re = ue;
-    /*
-     * U2 ... U4096
-     */
-    for (int i = 1; i < 4096; i++) {
-        hmacPwd20(
-            key,
-            u,
-            ue,
-            u,
-            ue
-        );
-        r ^= u;
-        re ^= ue;
+    for (int i=0; i<16; i++) W[i]=0u;
+    for (int i=0; i<32; i++) {
+        if (uint(i)<uSsidLen)
+            W[i >> 2] |= uSsid[i] << (24u - (uint(i) & 3u)*8u);
+    }
+    for (int j=0; j<4; j++) {
+        uint pos=uSsidLen+uint(j);
+        W[int(pos >> 2u)] |= ((blockIndex >> (24u-uint(j)*8u)) & 255u)
+                             << (24u-(pos & 3u)*8u);
+    }
+    uint len=uSsidLen+4u;
+    W[int(len >> 2u)] |= 0x80u << (24u-(len & 3u)*8u);
+    W[15]=(64u+len)*8u;
+    uvec4 inner=ip;
+    uint innerE=ie;
+    shaBlock(inner,innerE,W);
+    uvec4 u=op;
+    uint ue=oe;
+    sha20(u,ue,inner,innerE);
+    result=u; tail=ue;
+    for (int i=1; i<4096; i++) {
+        inner=ip; innerE=ie;
+        sha20(inner,innerE,u,ue);
+        u=op; ue=oe;
+        sha20(u,ue,inner,innerE);
+        result ^= u; tail ^= ue;
     }
 }
-/*
- * ============================================================
- * main
- * ============================================================
- */
 void main() {
-    uint id =
-        uint(gl_FragCoord.x);
-    if (id >= uCount) {
-        o0 =
-            uvec4(0);
-        o1 =
-            uvec4(0);
-        return;
-    }
-    /*
-     * Получаем пароль
-     */
+    uint id=uint(gl_FragCoord.x);
+    if (id>=uCount) { o0=uvec4(0u); o1=uvec4(0u); return; }
     uint key[16];
-    for (int row = 0; row < 4; row++) {
-        uvec4 p = texelFetch(uPasswords, ivec2(int(id), row), 0);
-        key[row * 4] = p.x;
-        key[row * 4 + 1] = p.y;
-        key[row * 4 + 2] = p.z;
-        key[row * 4 + 3] = p.w;
+    for (int row=0; row<4; row++) {
+        uvec4 p=texelFetch(uPasswords,ivec2(int(id),row),0);
+        key[row*4]=p.x; key[row*4+1]=p.y;
+        key[row*4+2]=p.z; key[row*4+3]=p.w;
     }
-    /*
-     * WPA2 PMK:
-     *
-     * PBKDF2-HMAC-SHA1
-     *
-     * output = 32 bytes
-     */
-    uvec4 a;
-    uvec4 b;
-    uint ae;
-    uint be;
-    pbkdfBlock(
-        key,
-        1u,
-        a,
-        ae
-    );
-    pbkdfBlock(
-        key,
-        2u,
-        b,
-        be
-    );
-    /*
-     * PBKDF2 output:
-     *
-     * T1 = 20 bytes
-     * T2 = берем первые 12 bytes
-     *
-     * PMK = 32 bytes
-     */
-    o0 = a;
-    o1 = uvec4(
-        ae,
-        b.x,
-        b.y,
-        b.z
-    );
+    // Prepare ipad/opad once per candidate, shared by both PBKDF2 blocks.
+    uvec4 ip,op;
+    uint ie,oe;
+    keyState(key,0x36363636u,ip,ie);
+    keyState(key,0x5c5c5c5cu,op,oe);
+    uvec4 a,b;
+    uint ae,be;
+    pbkdfBlock(ip,ie,op,oe,1u,a,ae);
+    pbkdfBlock(ip,ie,op,oe,2u,b,be);
+    o0=a; o1=uvec4(ae,b.xyz);
 }
 `;
