@@ -55,14 +55,11 @@
       const gl = this.gl;
       if (gl.isContextLost()) throw new Error('Контекст WebGL2 потерян');
       const encoder = new TextEncoder();
-      if (!Array.isArray(passwords)) throw new TypeError('passwords должен быть массивом строк');
-      const encoded = passwords.map(password => {
-        if (typeof password !== 'string' || encoder.encode(password).length !== 8)
-          throw new TypeError('Каждый пароль должен содержать ровно 8 байт UTF-8');
-        return encoder.encode(password);
-      });
-      if (typeof ssid !== 'string' || encoder.encode(ssid).length > 32)
-        throw new TypeError('SSID должен быть строкой длиной до 32 байт UTF-8');
+      const packedPasswords = WebGL2PMK.packPasswords(passwords);
+      if (typeof ssid !== 'string') throw new TypeError('SSID должен быть строкой');
+      const ssidBytes = encoder.encode(ssid);
+      if (ssidBytes.length < 1 || ssidBytes.length > 32)
+        throw new Error('SSID должен быть 1–32 байта UTF-8');
       if (!(keyData instanceof Uint8Array) || keyData.length !== 76)
         throw new TypeError('keyData должен содержать ровно 76 байт (Uint8Array)');
       if (!(message instanceof Uint8Array)) throw new TypeError('message должен быть Uint8Array');
@@ -75,13 +72,6 @@
       if (!count) return [];
 
       // CPU prepares only the original inputs and SHA-1 padding, never intermediate keys.
-      const packedPasswords = new Uint32Array(count * 4);
-      encoded.forEach((bytes, i) => {
-        const view = new DataView(bytes.buffer, bytes.byteOffset, 8);
-        packedPasswords[i * 4] = view.getUint32(0, false);
-        packedPasswords[i * 4 + 1] = view.getUint32(4, false);
-      });
-      const ssidBytes = encoder.encode(ssid);
       const ssidWords = new Uint32Array(32);
       ssidWords.set(ssidBytes);
       const ptkMessage = new Uint8Array(128);
@@ -132,7 +122,7 @@
             throw new Error('Не удалось создать framebuffer');
           return { fb, outputs };
         };
-        const input = texture(count, 1, packedPasswords);
+        const input = texture(count, 4, packedPasswords);
         const messageTexture = texture(4, blocks, words(micMessage));
         const pmk = target(2);
         const ptk = target(4);

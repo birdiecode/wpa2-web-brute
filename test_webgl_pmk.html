@@ -16,7 +16,7 @@
 </head>
 <body>
     <h1>Вычисление PMK</h1>
-    <p>PBKDF2-HMAC-SHA1, 4096 итераций, 32 байта. Пароль — ровно 8 байт UTF-8, SSID — до 32 байт.</p>
+    <p>PBKDF2-HMAC-SHA1, 4096 итераций, 32 байта. Пароль — 8–63 байта UTF-8, SSID — 1–32 байта UTF-8.</p>
     <form id="pmk-form">
         <label>Пароль: <input id="password" value="12345678" required></label>
         <label>SSID: <input id="ssid" value="Test_WiFi"></label>
@@ -53,11 +53,11 @@
             try {
                 const password = document.getElementById('password').value;
                 const ssid = document.getElementById('ssid').value;
-                if (encoder.encode(password).length !== 8) {
-                    throw new Error('Пароль должен быть ровно 8 байт UTF-8');
+                if (encoder.encode(password).length < 8 || encoder.encode(password).length > 63) {
+                    throw new Error('Пароль должен быть 8–63 байта UTF-8');
                 }
-                if (encoder.encode(ssid).length > 32) {
-                    throw new Error('SSID должен быть не длиннее 32 байт UTF-8');
+                if (encoder.encode(ssid).length < 1 || encoder.encode(ssid).length > 32) {
+                    throw new Error('SSID должен быть 1–32 байта UTF-8');
                 }
                 gpu ??= new WebGL2PMK();
                 const [pmk] = await gpu.derive([password], ssid);
@@ -80,8 +80,8 @@
             output.textContent = 'WebGL2 PMK: время расчёта и чтения результата (без компиляции шейдеров)\n\n';
             try {
                 const ssid = document.getElementById('ssid').value;
-                if (encoder.encode(ssid).length > 32) {
-                    throw new Error('SSID должен быть не длиннее 32 байт UTF-8');
+                if (encoder.encode(ssid).length < 1 || encoder.encode(ssid).length > 32) {
+                    throw new Error('SSID должен быть 1–32 байта UTF-8');
                 }
                 gpu ??= new WebGL2PMK();
                 for (const count of [1, 2, 4, 8, 16, 32]) {

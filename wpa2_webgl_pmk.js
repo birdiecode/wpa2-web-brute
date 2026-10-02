@@ -1,8 +1,26 @@
-// WebGL2 PBKDF2-HMAC-SHA1 backend for fixed 8-byte WPA2 passwords.
+// WebGL2 PBKDF2-HMAC-SHA1 backend for 8–63-byte UTF-8 WPA2 passwords.
 // One fragment = one password. Two RGBA32UI render targets = 32-byte PMK.
 class WebGL2PMK {
   static get shaders() {
     return { vertex: VS, fragment: FS };
+  }
+  // Four RGBA32UI rows: each candidate holds 16 big-endian words (64 bytes).
+  static packPasswords(passwords) {
+    if (!Array.isArray(passwords)) throw new TypeError("Пароли должны быть массивом строк");
+    const packed = new Uint32Array(passwords.length * 16);
+    const encoder = new TextEncoder();
+    passwords.forEach((password, candidate) => {
+      if (typeof password !== "string") throw new TypeError("Пароль должен быть строкой");
+      const bytes = encoder.encode(password);
+      if (bytes.length < 8 || bytes.length > 63)
+        throw new Error("Пароль должен быть 8–63 байта UTF-8");
+      for (let j = 0; j < bytes.length; j++) {
+        const word = j >>> 2;
+        const index = (word >>> 2) * passwords.length * 4 + candidate * 4 + (word & 3);
+        packed[index] |= bytes[j] << (24 - (j & 3) * 8);
+      }
+    });
+    return packed;
   }
   constructor() {
     this.canvas = document.createElement("canvas");
@@ -40,46 +58,29 @@ class WebGL2PMK {
   }
   async derive(passwords, ssid) {
     const gl = this.gl;
+    const packed = WebGL2PMK.packPasswords(passwords);
     const n = passwords.length;
     if (!n) return [];
     if (n > gl.getParameter(gl.MAX_TEXTURE_SIZE))
       throw new Error("batch too large");
+    if (typeof ssid !== "string") throw new TypeError("SSID должен быть строкой");
     const ssidBytes = new TextEncoder().encode(ssid);
-    if (ssidBytes.length > 32)
-      throw new Error("SSID > 32 bytes is invalid for this backend");
+    if (ssidBytes.length < 1 || ssidBytes.length > 32)
+      throw new Error("SSID должен быть 1–32 байта UTF-8");
     this.canvas.width = n;
     this.canvas.height = 1;
-    /*
-     * Password texture.
-     *
-     * Каждый пароль = 8 байт:
-     *
-     * uint32 #0 = password[0..3]
-     * uint32 #1 = password[4..7]
-     */
-    const packed = new Uint32Array(n * 4);
-    for (let i = 0; i < n; i++) {
-      const b = new TextEncoder().encode(passwords[i]);
-      if (b.length !== 8)
-        throw new Error(
-          "backend currently requires passwords encoded as exactly 8 UTF-8 bytes",
-        );
-      packed[i * 4] = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
-      packed[i * 4 + 1] =
-        ((b[4] << 24) | (b[5] << 16) | (b[6] << 8) | b[7]) >>> 0;
-    }
     const inTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, inTex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, n, 1);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, n, 4);
     gl.texSubImage2D(
       gl.TEXTURE_2D,
       0,
       0,
       0,
       n,
-      1,
+      4,
       gl.RGBA_INTEGER,
       gl.UNSIGNED_INT,
       packed,
@@ -301,11 +302,11 @@ void shaInit(
  * ============================================================
  * HMAC-SHA1(password, SSID || INT(block))
  *
- * Password = ровно 8 байт
+ * Password = 8–63 байта, дополненные нулями до 64 байт
  * ============================================================
  */
 void hmacPwdSalt(
-    uvec2 key,
+    uint key[16],
     uint block,
     out uvec4 dh,
     out uint de
@@ -316,14 +317,8 @@ void hmacPwdSalt(
     /*
      * ipad
      */
-    W[0] =
-        key.x ^
-        0x36363636u;
-    W[1] =
-        key.y ^
-        0x36363636u;
-    for (int i = 2; i < 16; i++)
-        W[i] = 0x36363636u;
+    for (int i = 0; i < 16; i++)
+        W[i] = key[i] ^ 0x36363636u;
     uvec4 h;
     uint e;
     shaInit(h, e);
@@ -400,15 +395,8 @@ void hmacPwdSalt(
      */
     for (int i = 0; i < 80; i++)
         W[i] = 0u;
-    W[0] =
-        key.x ^
-        0x5c5c5c5cu;
-    W[1] =
-        key.y ^
-        0x5c5c5c5cu;
-    for (int i = 2; i < 16; i++)
-        W[i] =
-            0x5c5c5c5cu;
+    for (int i = 0; i < 16; i++)
+        W[i] = key[i] ^ 0x5c5c5c5cu;
     uvec4 oh;
     uint oe;
     shaInit(
@@ -448,7 +436,7 @@ void hmacPwdSalt(
  * ============================================================
  */
 void hmacPwd20(
-    uvec2 key,
+    uint key[16],
     uvec4 m,
     uint me,
     out uvec4 dh,
@@ -460,15 +448,8 @@ void hmacPwd20(
      */
     for (int i = 0; i < 80; i++)
         W[i] = 0u;
-    W[0] =
-        key.x ^
-        0x36363636u;
-    W[1] =
-        key.y ^
-        0x36363636u;
-    for (int i = 2; i < 16; i++)
-        W[i] =
-            0x36363636u;
+    for (int i = 0; i < 16; i++)
+        W[i] = key[i] ^ 0x36363636u;
     uvec4 h;
     uint e;
     shaInit(
@@ -505,15 +486,8 @@ void hmacPwd20(
      */
     for (int i = 0; i < 80; i++)
         W[i] = 0u;
-    W[0] =
-        key.x ^
-        0x5c5c5c5cu;
-    W[1] =
-        key.y ^
-        0x5c5c5c5cu;
-    for (int i = 2; i < 16; i++)
-        W[i] =
-            0x5c5c5c5cu;
+    for (int i = 0; i < 16; i++)
+        W[i] = key[i] ^ 0x5c5c5c5cu;
     uvec4 oh;
     uint oe;
     shaInit(
@@ -551,7 +525,7 @@ void hmacPwd20(
  * ============================================================
  */
 void pbkdfBlock(
-    uvec2 key,
+    uint key[16],
     uint block,
     out uvec4 r,
     out uint re
@@ -602,17 +576,14 @@ void main() {
     /*
      * Получаем пароль
      */
-    uvec4 p =
-        texelFetch(
-            uPasswords,
-            ivec2(
-                int(id),
-                0
-            ),
-            0
-        );
-    uvec2 key =
-        p.xy;
+    uint key[16];
+    for (int row = 0; row < 4; row++) {
+        uvec4 p = texelFetch(uPasswords, ivec2(int(id), row), 0);
+        key[row * 4] = p.x;
+        key[row * 4 + 1] = p.y;
+        key[row * 4 + 2] = p.z;
+        key[row * 4 + 3] = p.w;
+    }
     /*
      * WPA2 PMK:
      *
