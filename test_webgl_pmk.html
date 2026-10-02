@@ -21,7 +21,7 @@
         <label>Пароль: <input id="password" value="12345678" required></label>
         <label>SSID: <input id="ssid" value="Test_WiFi"></label>
         <button id="run" type="submit">Вычислить PMK</button>
-        <button id="benchmark" type="button">Бенчмарк</button>
+        <button id="benchmark" type="button">Бенчмарк до 32768</button>
     </form>
     <p id="status" role="status" aria-live="polite"></p>
     <pre id="output">Ожидание...</pre>
@@ -84,7 +84,7 @@
                     throw new Error('SSID должен быть 1–32 байта UTF-8');
                 }
                 gpu ??= new WebGL2PMK();
-                for (const count of [1, 2, 4, 8, 16, 32]) {
+                for (const count of [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]) {
                     // Даём странице обновиться перед следующим расчётом.
                     await new Promise(resolve => setTimeout(resolve, 100));
                     const passwords = Array.from({ length: count }, (_, i) => String(10000000 + i));

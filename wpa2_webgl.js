@@ -66,7 +66,16 @@
       const maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
       const limit = Math.min(maxTexture, gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0]);
       const count = passwords.length;
-      if (count > limit) throw new RangeError(`Размер пачки не должен превышать ${limit}`);
+      if (count > 32768) throw new RangeError('Размер пачки не должен превышать 32768');
+      // Keep each draw within hardware limits; only final results cross to JS.
+      if (count > limit) {
+        const result = [];
+        for (let offset = 0; offset < count; offset += limit) {
+          const part = await this.derive(passwords.slice(offset, offset + limit), ssid, keyData, message);
+          for (const value of part) result.push(value);
+        }
+        return result;
+      }
       const blocks = Math.ceil((message.length + 9) / 64);
       if (blocks > maxTexture) throw new RangeError(`Сообщение не должно превышать ${maxTexture * 64 - 9} байт`);
       if (!count) return [];

@@ -142,7 +142,16 @@ void main() {
       const count = pmks.length;
       if (!count) return [];
       const maxWidth = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0]);
-      if (count > maxWidth) throw new RangeError(`Размер пачки не должен превышать ${maxWidth}`);
+      if (count > 32768) throw new RangeError('Размер пачки не должен превышать 32768');
+      // Keep each draw within hardware limits; only final results cross to JS.
+      if (count > maxWidth) {
+        const result = [];
+        for (let offset = 0; offset < count; offset += maxWidth) {
+          const part = await this.derive(pmks.slice(offset, offset + maxWidth), keyData);
+          for (const value of part) result.push(value);
+        }
+        return result;
+      }
       this.canvas.width = count;
       this.canvas.height = 1;
 

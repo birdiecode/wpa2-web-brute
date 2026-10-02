@@ -61,8 +61,17 @@ class WebGL2PMK {
     const packed = WebGL2PMK.packPasswords(passwords);
     const n = passwords.length;
     if (!n) return [];
-    if (n > gl.getParameter(gl.MAX_TEXTURE_SIZE))
-      throw new Error("batch too large");
+    const limit = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0]);
+    if (n > 32768) throw new RangeError('Размер пачки не должен превышать 32768');
+    // Keep each draw within hardware limits; only final results cross to JS.
+    if (n > limit) {
+      const result = [];
+      for (let offset = 0; offset < n; offset += limit) {
+        const part = await this.derive(passwords.slice(offset, offset + limit), ssid);
+        for (const value of part) result.push(value);
+      }
+      return result;
+    }
     if (typeof ssid !== "string") throw new TypeError("SSID должен быть строкой");
     const ssidBytes = new TextEncoder().encode(ssid);
     if (ssidBytes.length < 1 || ssidBytes.length > 32)

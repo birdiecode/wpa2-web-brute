@@ -122,7 +122,16 @@ void main() {
       const maxWidth = Math.min(maxTexture, gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0]);
       const count = keys.length;
       const blocks = Math.ceil((message.length + 9) / 64);
-      if (count > maxWidth) throw new RangeError(`Размер пачки не должен превышать ${maxWidth}`);
+      if (count > 32768) throw new RangeError('Размер пачки не должен превышать 32768');
+      // Keep each draw within hardware limits; only final results cross to JS.
+      if (count > maxWidth) {
+        const result = [];
+        for (let offset = 0; offset < count; offset += maxWidth) {
+          const part = await this.derive(keys.slice(offset, offset + maxWidth), message);
+          for (const value of part) result.push(value);
+        }
+        return result;
+      }
       if (blocks > maxTexture) throw new RangeError(`Сообщение не должно превышать ${maxTexture * 64 - 9} байт`);
       if (!count) return [];
       this.canvas.width = count;

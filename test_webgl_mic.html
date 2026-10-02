@@ -24,7 +24,7 @@
         <label>Сообщение (hex): <textarea id="message" rows="3" spellcheck="false"></textarea></label>
         <button type="submit">Вычислить MIC</button>
         <button id="self-test" type="button">Проверить тестовый вектор</button>
-        <button id="benchmark" type="button">Бенчмарк</button>
+        <button id="benchmark" type="button">Бенчмарк до 32768</button>
     </form>
     <p>Проверка использует отдельный фиксированный вектор и не меняет введённые данные.</p>
     <p id="status" role="status" aria-live="polite"></p>
@@ -106,7 +106,7 @@
             gpu ??= new WebGL2MIC();
             await gpu.derive([key], message); // Warm up outside the measurement.
             output.textContent = 'Время включает загрузку данных, расчёт и чтение MIC; без компиляции шейдеров.\n\n';
-            for (const count of [1, 2, 4, 8, 16, 32]) {
+            for (const count of [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]) {
                 await new Promise(resolve => setTimeout(resolve, 100));
                 const keys = Array.from({ length: count }, (_, i) => {
                     const candidate = key.slice();
