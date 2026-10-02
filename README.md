@@ -72,7 +72,6 @@ parse_cap.py — скрипт, который автоматически изв�
 UTF-8 и SSID 1–32 байта UTF-8. Ключ HMAC дополняется нулями до 64 байт;
 на кандидат используются четыре строки текстуры RGBA32UI.
 Общая цепочка считывает только итоговый MIC, сохраняя PMK/PTK на GPU.
-Проверка против Node.js crypto: `node tests/webgl_passwords.cjs`
 (Chromium с WebGL2 и CDP на порту 9239, HTTP-сервер проекта на 8771).
 
 ## WebGPU PMK: baseline и эксперименты
