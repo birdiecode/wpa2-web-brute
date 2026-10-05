@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wpa2-web-brute — тестирование</title>
+<style>
+body{font:16px system-ui;max-width:900px;margin:32px auto;padding:0 20px;background:#101827;color:#e2e8f0}h1{font-size:28px}form{display:grid;gap:16px}label{display:grid;gap:6px}input,select,textarea,button{font:inherit;padding:10px;border:1px solid #475569;border-radius:6px;background:#1e293b;color:inherit}textarea{font-family:monospace;overflow-wrap:anywhere}button{cursor:pointer;background:#1d4ed8}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#1e293b;padding:16px}small{color:#b4c3d8}
+</style>
+<h1>wpa2-web-brute</h1>
+<p>Тест полной цепочки PMK → PTK → MIC. Страница работает локально через file:/// без сервера.</p>
+<form id="test-form">
+<label>Метод<select id="method"><option value="webcrypto">Only WebCrypto</option><option value="webgl">Only WebGL2</option><option value="webgpu">Only WebGPU</option></select></label>
+<label>Размер батча<select id="batch" required>
+<option>1</option><option>2</option><option>4</option><option>8</option>
+<option>16</option><option>32</option><option>64</option><option>128</option>
+<option>256</option><option>512</option><option>1024</option><option>2048</option>
+<option>4096</option><option>8192</option><option>16384</option><option>32768</option>
+</select></label>
+<label>Пароль<input id="password" value="12345678" required></label>
+<small>Для замера один пароль повторяется во всём батче; проверяется MIC каждого результата.</small>
+<label>SSID<input id="ssid" value="Test_WiFi" required></label>
+<label>keyData (76 байт, hex)<textarea id="keydata" rows="3" required></textarea></label>
+<small>min(AP, STA) || max(AP, STA) || min(ANonce, SNonce) || max(ANonce, SNonce), лексикографический порядок байтов.</small>
+<label>Сообщение EAPOL (hex)<textarea id="message" rows="5" required></textarea></label>
+<small>В реальном EAPOL поле MIC должно быть обнулено заранее. По умолчанию используется синтетический тестовый вектор.</small>
+<label>Ожидаемый MIC (16 байт hex; можно очистить)<input id="expected" value="f955d7dba6bd85b2560cf3f9d8a501e8"></label>
+<button id="run">Запустить тест</button>
+<button id="reset" type="button">Восстановить значения по умолчанию</button>
+</form>
+<pre id="output" role="status">Готово к запуску.</pre>
+<script src="./wpa2-web-brute.full.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const hex = bytes => Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
+function defaults() {
+  $('method').value = 'webcrypto'; $('batch').value = 1;
+  $('password').value = '12345678'; $('ssid').value = 'Test_WiFi';
+  $('keydata').value = hex(Uint8Array.from({length:76}, (_, i) => i));
+  $('message').value = hex(Uint8Array.from({length:128}, (_, i) => i));
+  $('expected').value = 'f955d7dba6bd85b2560cf3f9d8a501e8';
+}
+function bytes(value, length) {
+  value = value.replace(/\s/g, '');
+  if (!/^(?:[0-9a-f]{2})*$/i.test(value) || (length !== undefined && value.length !== length * 2)) throw new Error('Некорректный hex или длина поля');
+  return Uint8Array.from(value.match(/../g) || [], p => parseInt(p, 16));
+}
+defaults();
+$('reset').onclick = defaults;
+let busy = false;
+async function run() {
+  if (busy) return;
+  busy = true;
+  const controls = Array.from(document.querySelectorAll('input,textarea,select,button'));
+  controls.forEach(el => el.disabled = true);
+  let backend;
+  try {
+    const batch = Number($('batch').value);
+    if (!Number.isInteger(batch) || batch < 1 || batch > 32768) throw new Error('Batch: целое число от 1 до 32768');
+    const keyData = bytes($('keydata').value, 76), message = bytes($('message').value);
+    const expected = $('expected').value.trim() ? hex(bytes($('expected').value, 16)) : '';
+    const api = globalThis.WPA2WebBrute, method = $('method').value;
+    if (!api) throw new Error('Библиотека не загружена. Откройте dist/index.html после npm run build.');
+    if (method === 'webcrypto' && !globalThis.crypto?.subtle) throw new Error('WebCrypto недоступен в этом браузере.');
+    if (method === 'webgpu' && !navigator.gpu) throw new Error('WebGPU недоступен для этого браузера или file://. Выберите WebGL2 / WebCrypto либо браузер с поддержкой WebGPU.');
+    $('output').textContent = 'Инициализация…';
+    await new Promise(r => setTimeout(r, 30));
+    const init = performance.now();
+    backend = method === 'webgl' ? new api.WPA2WebGL() : await (method === 'webgpu' ? api.WPA2WebGPU : api.WPA2WebCrypto).create();
+    const initMs = performance.now() - init;
+    const passwords = Array(batch).fill($('password').value);
+    const start = performance.now();
+    const result = await backend.derive(passwords, $('ssid').value, keyData, message);
+    const elapsed = performance.now() - start;
+    const mics = result.mics || result.map(r => r.mic);
+    if (mics.length !== batch) throw new Error('Неверное число результатов');
+    const first = hex(mics[0]);
+    if (!mics.every(m => hex(m) === (expected || first))) throw new Error('MIC не совпал: первый результат ' + first);
+    $('output').textContent = `Метод: ${method}\nBatch: ${batch}\nMIC: ${first}\n${expected ? 'Все MIC совпали с ожидаемым.' : 'Все MIC одинаковы; ожидаемый MIC не задан.'}\nИнициализация: ${initMs.toFixed(2)} мс\nРасчёт: ${elapsed.toFixed(2)} мс\nСкорость: ${(batch * 1000 / elapsed).toFixed(2)} цепочек/с`;
+  } catch (error) { $('output').textContent = 'Ошибка: ' + error.message; }
+  finally {
+    try { backend?.dispose(); }
+    finally { busy = false; controls.forEach(el => el.disabled = false); }
+  }
+}
+$('test-form').onsubmit = event => { event.preventDefault(); return run(); };
+</script>
+</html>

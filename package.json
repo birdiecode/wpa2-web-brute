@@ -1,0 +1,18 @@
+{
+  "name": "wpa2-web-brute",
+  "version": "1.0.0",
+  "description": "WPA2 PMK, PTK and MIC with WebCrypto, WebGL2 and WebGPU",
+  "type": "module",
+  "main": "./dist/wpa2-web-brute.full.cjs",
+  "module": "./dist/wpa2-web-brute.full.mjs",
+  "exports": {
+    ".": { "import": "./dist/wpa2-web-brute.full.mjs", "require": "./dist/wpa2-web-brute.full.cjs" },
+    "./full": { "import": "./dist/wpa2-web-brute.full.mjs", "require": "./dist/wpa2-web-brute.full.cjs" },
+    "./webcrypto": { "import": "./dist/wpa2-web-brute.webcrypto.mjs", "require": "./dist/wpa2-web-brute.webcrypto.cjs" },
+    "./webgl": { "import": "./dist/wpa2-web-brute.webgl.mjs", "require": "./dist/wpa2-web-brute.webgl.cjs" },
+    "./webgpu": { "import": "./dist/wpa2-web-brute.webgpu.mjs", "require": "./dist/wpa2-web-brute.webgpu.cjs" }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": { "build": "node scripts/build.mjs", "test": "npm run build && node --test tests/package.test.mjs", "prepack": "npm run build" },
+  "engines": { "node": ">=20" }
+}
