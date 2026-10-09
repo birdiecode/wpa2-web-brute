@@ -6,13 +6,46 @@
   "main": "./dist/wpa2-web-brute.full.cjs",
   "module": "./dist/wpa2-web-brute.full.mjs",
   "exports": {
-    ".": { "import": "./dist/wpa2-web-brute.full.mjs", "require": "./dist/wpa2-web-brute.full.cjs" },
-    "./full": { "import": "./dist/wpa2-web-brute.full.mjs", "require": "./dist/wpa2-web-brute.full.cjs" },
-    "./webcrypto": { "import": "./dist/wpa2-web-brute.webcrypto.mjs", "require": "./dist/wpa2-web-brute.webcrypto.cjs" },
-    "./webgl": { "import": "./dist/wpa2-web-brute.webgl.mjs", "require": "./dist/wpa2-web-brute.webgl.cjs" },
-    "./webgpu": { "import": "./dist/wpa2-web-brute.webgpu.mjs", "require": "./dist/wpa2-web-brute.webgpu.cjs" }
+    ".": {
+      "import": "./dist/wpa2-web-brute.full.mjs",
+      "require": "./dist/wpa2-web-brute.full.cjs"
+    },
+    "./full": {
+      "import": "./dist/wpa2-web-brute.full.mjs",
+      "require": "./dist/wpa2-web-brute.full.cjs"
+    },
+    "./webcrypto": {
+      "import": "./dist/wpa2-web-brute.webcrypto.mjs",
+      "require": "./dist/wpa2-web-brute.webcrypto.cjs"
+    },
+    "./webgl": {
+      "import": "./dist/wpa2-web-brute.webgl.mjs",
+      "require": "./dist/wpa2-web-brute.webgl.cjs"
+    },
+    "./webgpu": {
+      "import": "./dist/wpa2-web-brute.webgpu.mjs",
+      "require": "./dist/wpa2-web-brute.webgpu.cjs"
+    }
   },
-  "files": ["dist", "README.md"],
-  "scripts": { "build": "node scripts/build.mjs", "test": "npm run build && node --test tests/package.test.mjs", "prepack": "npm run build" },
-  "engines": { "node": ">=20" }
+  "files": [
+    "dist",
+    "README.md",
+    "bin"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build",
+    "cli": "node bin/wpa2-web-brute.mjs",
+    "test:browser": "npm run build && WPA2_BROWSER_TEST=1 node --test tests/cli.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "puppeteer": "^24.43.1"
+  },
+  "bin": {
+    "wpa2-web-brute": "./bin/wpa2-web-brute.mjs"
+  }
 }
