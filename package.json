@@ -2,6 +2,7 @@
   "name": "wpa2-web-brute",
   "version": "1.0.0",
   "description": "WPA2 PMK, PTK and MIC with WebCrypto, WebGL2 and WebGPU",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/wpa2-web-brute.full.cjs",
   "module": "./dist/wpa2-web-brute.full.mjs",
@@ -40,7 +41,9 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit -p tests/types/tsconfig.json",
+    "test:cli": "node --test tests/cli.test.mjs",
+    "test": "npm run build && npm run typecheck && npm run test:cli && node --test tests/package.test.mjs tests/webgl-pmk-resources.test.mjs",
     "prepack": "npm run build",
     "cli": "node bin/wpa2-web-brute.mjs",
     "test:browser": "npm run build && WPA2_BROWSER_TEST=1 node --test --test-concurrency=1 tests/cli.test.mjs tests/gpu-browser.test.mjs"
@@ -61,6 +64,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
-    "puppeteer": "^24.43.1"
+    "puppeteer": "^24.43.1",
+    "typescript": "^5.9.3"
   }
 }

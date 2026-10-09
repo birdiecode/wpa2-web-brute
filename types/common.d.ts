@@ -25,7 +25,6 @@ export interface WPA2Chain {
 }
 
 export interface BatchBackend<Result> {
-  readonly maxBatch: number;
   calculate(...args: any[]): Promise<Result>;
   dispose(): void;
 }
