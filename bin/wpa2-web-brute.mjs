@@ -12,6 +12,9 @@ Without --input, runs the built-in synthetic verification vector.
   --input <file>            JSON: passwords[], ssid, keyData (hex), message (hex),
                            optional expectedMic (hex, applied to every result)
   --batch-size <n>         Passwords per batch, 1–32768 (default: 1)
+  --benchmark <kind>       GPU benchmark: pmk | full | all
+  --warmup <n>             Benchmark warmup runs (default: 2)
+  --repeats <n>            Measured benchmark runs (default: 5)
   --timeout <ms>           Timeout per backend (default: 120000)
   --software              Use SwiftShader software GPU
   --executable-path <path> Chromium executable (default: Puppeteer's browser)
@@ -47,6 +50,8 @@ async function main() {
   const { values } = parseArgs({ options: {
     help: { type: 'boolean' }, backend: { type: 'string', default: 'all' },
     input: { type: 'string' }, 'batch-size': { type: 'string', default: '1' },
+    benchmark: { type: 'string' }, warmup: { type: 'string', default: '2' },
+    repeats: { type: 'string', default: '5' },
     timeout: { type: 'string', default: '120000' }, software: { type: 'boolean' },
     'executable-path': { type: 'string' }, 'browser-arg': { type: 'string', multiple: true },
   } });
@@ -54,6 +59,13 @@ async function main() {
   const names = ['webcrypto', 'webgl', 'webgpu'];
   if (values.backend !== 'all' && !names.includes(values.backend)) throw new Error('Unknown backend: ' + values.backend);
   const batchSize = positive(values['batch-size'], 32768, 'batch-size');
+  const benchmark = values.benchmark;
+  if (benchmark !== undefined && !['pmk', 'full', 'all'].includes(benchmark))
+    throw new Error('Unknown benchmark: ' + benchmark);
+  const warmup = positive(values.warmup, 100, 'warmup');
+  const repeats = positive(values.repeats, 100, 'repeats');
+  if (benchmark !== undefined && values.backend === 'webcrypto')
+    throw new Error('GPU benchmark requires --backend webgl, webgpu or all');
   const timeout = positive(values.timeout, 2147483647, 'timeout');
   const input = validate(values.input ? JSON.parse(await readFile(values.input, 'utf8')) : {
     passwords: ['12345678'], ssid: 'Test_WiFi',
@@ -83,17 +95,62 @@ async function main() {
         ...(values.software ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []),
         ...(values['browser-arg'] ?? [])],
     });
-    const report = { results: [] };
-    for (const backend of values.backend === 'all' ? names : [values.backend]) {
+    const report = benchmark === undefined ? { results: [] } : { benchmark, warmup, repeats, results: [] };
+    const backends = benchmark === undefined
+      ? (values.backend === 'all' ? names : [values.backend])
+      : (values.backend === 'all' ? ['webgl', 'webgpu'] : [values.backend]);
+    for (const backend of backends) {
       let page, timer;
       try {
         const run = async () => {
           page = await browser.newPage();
           await page.goto(`http://127.0.0.1:${server.address().port}/`, { timeout });
           await page.addScriptTag({ content: source });
-          return page.evaluate(async ({ backend, input, batchSize }) => {
+          return page.evaluate(async ({ backend, input, batchSize, benchmark, warmup, repeats }) => {
             const api = globalThis.WPA2WebBrute;
             const bytes = hex => Uint8Array.from(hex.match(/../g) ?? [], byte => parseInt(byte, 16));
+            if (benchmark !== undefined) {
+              const keyData = bytes(input.keyData), message = bytes(input.message);
+              const makePasswords = count => Array.from({ length: count }, (_, i) => input.passwords[i % input.passwords.length]);
+              const summarize = async (label, create, run) => {
+                let instance;
+                try {
+                  instance = await create();
+                  for (let i = 0; i < warmup; i++) await run(instance);
+                  const samples = [];
+                  for (let i = 0; i < repeats; i++) {
+                    const started = performance.now();
+                    const count = await run(instance);
+                    const elapsedMs = performance.now() - started;
+                    samples.push({ elapsedMs, perSecond: count * 1000 / elapsedMs });
+                  }
+                  const elapsedMs = samples.reduce((sum, sample) => sum + sample.elapsedMs, 0);
+                  const count = samples.reduce((sum, sample) => sum + sample.perSecond * sample.elapsedMs / 1000, 0);
+                  return { label, count: Math.round(count / repeats), elapsedMs, perSecond: count * 1000 / elapsedMs, samples };
+                } finally { instance?.dispose(); }
+              };
+              const result = { backend, benchmark, metrics: [] };
+              if (benchmark === 'pmk' || benchmark === 'all') {
+                const Pmk = backend === 'webgl' ? api.WebGL2PMK : api.WebGPUPMK;
+                const create = backend === 'webgl' ? async () => new Pmk() : () => Pmk.create();
+                const metric = await summarize('pmk', create, async instance => {
+                  const count = Math.min(batchSize, backend === 'webgl' ? 32768 : 4096);
+                  await (instance.derive ? instance.derive(makePasswords(count), input.ssid) : instance.calculate(makePasswords(count), input.ssid));
+                  return count;
+                });
+                result.metrics.push(metric);
+              }
+              if (benchmark === 'full' || benchmark === 'all') {
+                const Chain = { webgl: api.WPA2WebGL, webgpu: api.WPA2WebGPU }[backend];
+                const metric = await summarize('full', () => Chain.create(), async instance => {
+                  const count = Math.min(batchSize, instance.maxBatch);
+                  await instance.derive(makePasswords(count), input.ssid, keyData, message);
+                  return count;
+                });
+                result.metrics.push(metric);
+              }
+              return result;
+            }
             const started = performance.now();
             let instance;
             try {
@@ -110,7 +167,7 @@ async function main() {
               return { backend, ok: matches === undefined || matches.every(Boolean), mics,
                 ...(matches === undefined ? {} : { matches }), elapsedMs: Math.round(performance.now() - started) };
             } finally { instance?.dispose(); }
-          }, { backend, input, batchSize });
+          }, { backend, input, batchSize, benchmark, warmup, repeats });
         };
         report.results.push(await Promise.race([run(), new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error(`Backend timed out after ${timeout} ms`)), timeout);

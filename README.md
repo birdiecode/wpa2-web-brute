@@ -106,6 +106,7 @@ npm run build
 npm run cli -- --backend all
 npm run cli -- --backend all --software
 npm run cli -- --backend webgpu --input input.json --batch-size 256
+npm run cli -- --backend all --benchmark all --batch-size 1024 --warmup 2 --repeats 5 --software
 npm run cli -- --help
 ```
 
@@ -147,6 +148,15 @@ npm run cli -- --help
 2 — неверный ввод или ошибка запуска браузера. `--timeout` ограничивает
 время одного бэкенда в миллисекундах (по умолчанию 120000).
 Браузер и временный HTTP-сервер на `127.0.0.1` закрываются после работы.
+
+Для GPU-бенчмарка используйте `--benchmark pmk`, `--benchmark full` или
+`--benchmark all` вместе с `--backend webgl`, `--backend webgpu` или `all`.
+Режим `pmk` измеряет только PBKDF2 PMK, а `full` — полную цепочку PMK → PTK →
+MIC. `--warmup` задаёт число прогревочных запусков (по умолчанию 2),
+`--repeats` — число измерений (по умолчанию 5). В JSON-отчёте каждая метрика
+содержит `perSecond` (PMK/s или полных цепочек/s), суммарное время и результаты
+отдельных повторов. Для WebGPU размер пачки ограничивается возможностями
+устройства автоматически.
 
 `npm test` проверяет пакет и валидацию CLI. `npm run test:browser` дополнительно
 запускает все три бэкенда через SwiftShader и сравнивает результат с Node crypto.

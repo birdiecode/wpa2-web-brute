@@ -16,7 +16,12 @@ test('CLI help and invalid arguments work without browser startup', async () => 
   const help = await run(['--help']);
   assert.equal(help.code, 0);
   assert.match(help.stdout, /Headless Chromium/);
-  for (const args of [['--backend', 'invalid'], ['--batch-size', '0'], ['--timeout', 'NaN'], ['--unknown']]) {
+  assert.match(help.stdout, /--benchmark/);
+  for (const args of [
+    ['--backend', 'invalid'], ['--backend', 'webcrypto', '--benchmark', 'pmk'],
+    ['--benchmark', 'invalid'], ['--batch-size', '0'], ['--warmup', '0'],
+    ['--repeats', '0'], ['--timeout', 'NaN'], ['--unknown'],
+  ]) {
     const result = await run(args);
     assert.equal(result.code, 2);
     assert.equal(result.stdout, '');
