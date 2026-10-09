@@ -44,7 +44,19 @@ function setup(failure) {
   } });
   const context = vm.createContext({ TextEncoder, document: { createElement: () => ({ getContext: () => gl }) } });
   vm.runInContext(source, context);
-  return { Backend: context.WPA2WebBrute.WebGL2PMK, live, calls, lost: () => lost };
+  return { Backend: context.WPA2WebBrute.WebGL2PMK, PTK: context.WPA2WebBrute.WebGL2PTK,
+    MIC: context.WPA2WebBrute.WebGL2MIC, live, calls, lost: () => lost };
+}
+
+for (const [name, key] of [['PTK', 'PTK'], ['MIC', 'MIC']]) {
+  for (const failure of ['compile:1', 'link']) {
+    test(`${name} constructor releases context after ${failure}`, () => {
+      const state = setup(failure);
+      assert.throws(() => new state[key]());
+      assert.equal(state.live.size, 0);
+      assert.equal(state.lost(), 1);
+    });
+  }
 }
 
 for (const failure of ['flag:drawArrays:1', 'flag:readPixels:1', 'flag:readPixels:2',

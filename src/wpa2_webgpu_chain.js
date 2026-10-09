@@ -9,8 +9,9 @@ class WPA2WebGPU {
         const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
         if (!adapter) throw new Error('WebGPU adapter не найден');
         const device = await adapter.requestDevice();
-        const chain = new WPA2WebGPU(device);
+        let chain;
         try {
+            chain = new WPA2WebGPU(device);
             const sources = [WebGPUPMK.shader, WebGPUPTK.shader, WebGPUMIC.ptkShader];
             for (let i = 0; i < sources.length; i++) {
                 const module = device.createShaderModule({ code: sources[i] });
@@ -23,7 +24,11 @@ class WPA2WebGPU {
                 }));
             }
             return chain;
-        } catch (error) { chain.dispose(); throw error; }
+        } catch (error) {
+            if (chain) chain.dispose();
+            else device.destroy();
+            throw error;
+        }
     }
     constructor(device) {
         this.device = device;

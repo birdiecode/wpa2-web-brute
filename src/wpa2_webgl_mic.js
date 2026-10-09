@@ -100,6 +100,7 @@ void main() {
         this.uBlocks = gl.getUniformLocation(program, 'uBlocks');
       } catch (error) {
         gl.deleteProgram(program);
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
         throw error;
       } finally {
         for (const shader of shaders) gl.deleteShader(shader);

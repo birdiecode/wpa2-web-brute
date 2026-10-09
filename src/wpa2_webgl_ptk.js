@@ -120,6 +120,7 @@ void main() {
         this.uMessage = gl.getUniformLocation(program, 'uMessage[0]');
       } catch (error) {
         gl.deleteProgram(program);
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
         throw error;
       } finally {
         for (const shader of shaders) gl.deleteShader(shader);
