@@ -41,6 +41,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
+    "prepare": "npm run build",
     "typecheck": "tsc --noEmit -p tests/types/tsconfig.json",
     "test:cli": "node --test tests/cli.test.mjs",
     "test": "npm run build && npm run typecheck && npm run test:cli && node --test tests/package.test.mjs tests/webgl-pmk-resources.test.mjs",
