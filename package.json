@@ -37,15 +37,24 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "prepack": "npm run build",
     "cli": "node bin/wpa2-web-brute.mjs",
-    "test:browser": "npm run build && WPA2_BROWSER_TEST=1 node --test tests/cli.test.mjs"
+    "test:browser": "npm run build && WPA2_BROWSER_TEST=1 node --test --test-concurrency=1 tests/cli.test.mjs tests/gpu-browser.test.mjs"
   },
   "engines": {
     "node": ">=20"
   },
-  "dependencies": {
+  "peerDependencies": {
     "puppeteer": "^24.43.1"
+  },
+  "peerDependenciesMeta": {
+    "puppeteer": {
+      "optional": true
+    }
   },
   "bin": {
     "wpa2-web-brute": "./bin/wpa2-web-brute.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "puppeteer": "^24.43.1"
   }
 }

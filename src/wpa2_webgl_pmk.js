@@ -32,32 +32,71 @@ class WebGL2PMK {
     });
     if (!this.gl) throw new Error("WebGL2 unavailable");
     const gl = this.gl;
-    this.program = this._program(VS, FS);
-    this.uCount = gl.getUniformLocation(this.program, "uCount");
-    this.uSsidLen = gl.getUniformLocation(this.program, "uSsidLen");
-    this.uSsid = gl.getUniformLocation(this.program, "uSsid[0]");
+    this.program = null;
+    this.disposed = false;
+    try {
+      this.program = this._program(VS, FS);
+      this.uCount = gl.getUniformLocation(this.program, "uCount");
+      this.uSsidLen = gl.getUniformLocation(this.program, "uSsidLen");
+      this.uSsid = gl.getUniformLocation(this.program, "uSsid[0]");
+    } catch (error) {
+      this.dispose();
+      throw error;
+    }
   }
   _shader(type, src) {
     const g = this.gl;
     const s = g.createShader(type);
-    g.shaderSource(s, src);
-    g.compileShader(s);
-    if (!g.getShaderParameter(s, g.COMPILE_STATUS))
-      throw new Error(g.getShaderInfoLog(s));
-    return s;
+    if (!s) throw new Error("Unable to create WebGL shader");
+    try {
+      g.shaderSource(s, src);
+      g.compileShader(s);
+      if (!g.getShaderParameter(s, g.COMPILE_STATUS))
+        throw new Error(g.getShaderInfoLog(s));
+      return s;
+    } catch (error) {
+      g.deleteShader(s);
+      throw error;
+    }
   }
   _program(vs, fs) {
     const g = this.gl;
     const p = g.createProgram();
-    g.attachShader(p, this._shader(g.VERTEX_SHADER, vs));
-    g.attachShader(p, this._shader(g.FRAGMENT_SHADER, fs));
-    g.linkProgram(p);
-    if (!g.getProgramParameter(p, g.LINK_STATUS))
-      throw new Error(g.getProgramInfoLog(p));
-    return p;
+    if (!p) throw new Error("Unable to create WebGL program");
+    const shaders = [];
+    try {
+      for (const [type, source] of [[g.VERTEX_SHADER, vs], [g.FRAGMENT_SHADER, fs]]) {
+        const shader = this._shader(type, source);
+        shaders.push(shader);
+        g.attachShader(p, shader);
+      }
+      g.linkProgram(p);
+      if (!g.getProgramParameter(p, g.LINK_STATUS))
+        throw new Error(g.getProgramInfoLog(p));
+      return p;
+    } catch (error) {
+      g.deleteProgram(p);
+      throw error;
+    } finally {
+      // Detach so successfully linked programs do not retain deleted shaders.
+      for (const shader of shaders) {
+        if (g.isProgram(p)) g.detachShader(p, shader);
+        g.deleteShader(shader);
+      }
+    }
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.gl.useProgram(null);
+    if (this.program) this.gl.deleteProgram(this.program);
+    this.program = null;
+    this.gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
   async derive(passwords, ssid) {
+    if (this.disposed) throw new Error("WebGL2PMK already disposed");
     const gl = this.gl;
+    if (gl.isContextLost()) throw new Error("WebGL2 context lost");
     const packed = WebGL2PMK.packPasswords(passwords);
     const n = passwords.length;
     if (!n) return [];
@@ -78,101 +117,118 @@ class WebGL2PMK {
       throw new Error("SSID должен быть 1–32 байта UTF-8");
     this.canvas.width = n;
     this.canvas.height = 1;
-    const inTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, inTex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, n, 4);
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      n,
-      4,
-      gl.RGBA_INTEGER,
-      gl.UNSIGNED_INT,
-      packed,
-    );
-    function mkOut() {
-      const t = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, t);
+    const textures = [];
+    let fb = null;
+    const texture = () => {
+      const tex = gl.createTexture();
+      if (!tex) throw new Error("Unable to create WebGL texture");
+      textures.push(tex);
+      return tex;
+    };
+    try {
+      const inTex = texture();
+      gl.bindTexture(gl.TEXTURE_2D, inTex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, n, 1);
-      return t;
-    }
-    const out0 = mkOut();
-    const out1 = mkOut();
-    const fb = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      out0,
-      0,
-    );
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT1,
-      gl.TEXTURE_2D,
-      out1,
-      0,
-    );
-    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new Error("integer framebuffer incomplete");
-    }
-    gl.useProgram(this.program);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, inTex);
-    gl.uniform1i(gl.getUniformLocation(this.program, "uPasswords"), 0);
-    gl.uniform1ui(this.uCount, n);
-    gl.uniform1ui(this.uSsidLen, ssidBytes.length);
-    const su = new Uint32Array(32);
-    for (let i = 0; i < ssidBytes.length; i++) su[i] = ssidBytes[i];
-    gl.uniform1uiv(this.uSsid, su);
-    gl.viewport(0, 0, n, 1);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    /*
-     * ВАЖНО:
-     * gl.finish() блокирует CPU до окончания GPU.
-     * Для первого тестового варианта это нормально.
-     */
-    gl.finish();
-    const a = new Uint32Array(n * 4);
-    const b = new Uint32Array(n * 4);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
-    gl.readPixels(0, 0, n, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, a);
-    gl.readBuffer(gl.COLOR_ATTACHMENT1);
-    gl.readPixels(0, 0, n, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, b);
-    const result = [];
-    for (let i = 0; i < n; i++) {
-      const pmk = new Uint8Array(32);
-      const words = [
-        a[i * 4],
-        a[i * 4 + 1],
-        a[i * 4 + 2],
-        a[i * 4 + 3],
-        b[i * 4],
-        b[i * 4 + 1],
-        b[i * 4 + 2],
-        b[i * 4 + 3],
-      ];
-      for (let w = 0; w < 8; w++) {
-        pmk[w * 4] = words[w] >>> 24;
-        pmk[w * 4 + 1] = (words[w] >>> 16) & 255;
-        pmk[w * 4 + 2] = (words[w] >>> 8) & 255;
-        pmk[w * 4 + 3] = words[w] & 255;
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, n, 4);
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        n,
+        4,
+        gl.RGBA_INTEGER,
+        gl.UNSIGNED_INT,
+        packed,
+      );
+      function mkOut() {
+        const t = texture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, n, 1);
+        return t;
       }
-      result.push(pmk);
+      const out0 = mkOut();
+      const out1 = mkOut();
+      fb = gl.createFramebuffer();
+      if (!fb) throw new Error("Unable to create WebGL framebuffer");
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0,
+        gl.TEXTURE_2D,
+        out0,
+        0,
+      );
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT1,
+        gl.TEXTURE_2D,
+        out1,
+        0,
+      );
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error("integer framebuffer incomplete");
+      }
+      gl.useProgram(this.program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, inTex);
+      gl.uniform1i(gl.getUniformLocation(this.program, "uPasswords"), 0);
+      gl.uniform1ui(this.uCount, n);
+      gl.uniform1ui(this.uSsidLen, ssidBytes.length);
+      const su = new Uint32Array(32);
+      for (let i = 0; i < ssidBytes.length; i++) su[i] = ssidBytes[i];
+      gl.uniform1uiv(this.uSsid, su);
+      gl.viewport(0, 0, n, 1);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      /*
+       * ВАЖНО:
+       * gl.finish() блокирует CPU до окончания GPU.
+       * Для первого тестового варианта это нормально.
+       */
+      gl.finish();
+      const a = new Uint32Array(n * 4);
+      const b = new Uint32Array(n * 4);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      gl.readPixels(0, 0, n, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, a);
+      gl.readBuffer(gl.COLOR_ATTACHMENT1);
+      gl.readPixels(0, 0, n, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, b);
+      // WebGL failures usually set an error flag instead of throwing.
+      // Validate both readbacks before exposing any PMK bytes.
+      const error = gl.getError();
+      if (gl.isContextLost()) throw new Error("WebGL2 context lost during PMK readback");
+      if (error !== gl.NO_ERROR) throw new Error(`WebGL2 PMK readback failed: ${error}`);
+      const result = [];
+      for (let i = 0; i < n; i++) {
+        const pmk = new Uint8Array(32);
+        const words = [
+          a[i * 4],
+          a[i * 4 + 1],
+          a[i * 4 + 2],
+          a[i * 4 + 3],
+          b[i * 4],
+          b[i * 4 + 1],
+          b[i * 4 + 2],
+          b[i * 4 + 3],
+        ];
+        for (let w = 0; w < 8; w++) {
+          pmk[w * 4] = words[w] >>> 24;
+          pmk[w * 4 + 1] = (words[w] >>> 16) & 255;
+          pmk[w * 4 + 2] = (words[w] >>> 8) & 255;
+          pmk[w * 4 + 3] = words[w] & 255;
+        }
+        result.push(pmk);
+      }
+      return result;
+    } finally {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      if (fb) gl.deleteFramebuffer(fb);
+      for (const tex of textures) gl.deleteTexture(tex);
     }
-    gl.deleteTexture(inTex);
-    gl.deleteTexture(out0);
-    gl.deleteTexture(out1);
-    gl.deleteFramebuffer(fb);
-    return result;
   }
 }
 /*
@@ -390,3 +446,5 @@ void main() {
     o0=a; o1=uvec4(ae,b.xyz);
 }
 `;
+
+export { WebGL2PMK };

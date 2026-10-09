@@ -1,7 +1,6 @@
 // WPA2 MIC, matching calc_mic in wpa2_brute.js: HMAC-SHA1 truncated to 16 bytes.
 // Usage: await new WebGL2MIC().derive([ptk.subarray(0, 16)], message);
 // Supply EAPOL bytes with the MIC field already zeroed. Input bytes are not modified.
-(() => {
   const vertexSource = `#version 300 es
 void main() {
     vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
@@ -70,6 +69,7 @@ void main() {
       return { vertex: vertexSource, fragment: fragmentSource };
     }
     constructor() {
+      this.disposed = false;
       this.canvas = document.createElement('canvas');
       this.gl = this.canvas.getContext('webgl2', {
         antialias: false, depth: false, stencil: false,
@@ -109,6 +109,7 @@ void main() {
     // keys: array of 16-byte Uint8Array KCKs; message: shared Uint8Array.
     // Returns one 16-byte Uint8Array MIC per key. Readback blocks the UI thread.
     async derive(keys, message) {
+      if (this.disposed) throw new Error('WebGL2MIC уже освобождён');
       if (!this.program) throw new Error('WebGL2MIC уже освобождён');
       const gl = this.gl;
       if (gl.isContextLost()) throw new Error('Контекст WebGL2 потерян');
@@ -206,9 +207,11 @@ void main() {
     }
 
     dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
       if (this.program) this.gl.deleteProgram(this.program);
       this.program = null;
+      this.gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
   }
-  globalThis.WebGL2MIC = WebGL2MIC;
-})();
+  export { WebGL2MIC };

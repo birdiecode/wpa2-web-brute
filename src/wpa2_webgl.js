@@ -1,10 +1,12 @@
-// Load wpa2_webgl_pmk.js, wpa2_webgl_ptk.js and wpa2_webgl_mic.js first.
+import { WebGL2PMK } from './wpa2_webgl_pmk.js';
+import { WebGL2PTK } from './wpa2_webgl_ptk.js';
+import { WebGL2MIC } from './wpa2_webgl_mic.js';
 // Only their shader sources are reused; no standalone backend instances are created.
-// await new WPA2WebGL().derive(passwords, ssid, keyData, message) -> [{ mic }].
+// await backend.derive(passwords, ssid, keyData, message) -> { mics: Uint8Array[] }.
 // PMK and full PTK stay in GPU textures. Only the final 16-byte MIC is read back.
 // keyData must already be ordered; the EAPOL MIC field must already be zeroed.
-(() => {
   class WPA2WebGL {
+    static async create() { return new WPA2WebGL(); }
     constructor() {
       if (typeof WebGL2PMK === 'undefined' || typeof WebGL2PTK === 'undefined' || typeof WebGL2MIC === 'undefined')
         throw new Error('Сначала подключите WebGL2-модули PMK, PTK и MIC');
@@ -13,6 +15,7 @@
         antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false,
       });
       if (!this.gl) throw new Error('WebGL2 недоступен');
+      this.maxBatch = 32768;
       this.busy = false;
       this.disposed = false;
       this.programs = [];
@@ -55,6 +58,8 @@
       const gl = this.gl;
       if (gl.isContextLost()) throw new Error('Контекст WebGL2 потерян');
       const encoder = new TextEncoder();
+      if (!Array.isArray(passwords) || passwords.length < 1 || passwords.length > this.maxBatch)
+        throw new RangeError(`Batch: 1–${this.maxBatch}`);
       const packedPasswords = WebGL2PMK.packPasswords(passwords);
       if (typeof ssid !== 'string') throw new TypeError('SSID должен быть строкой');
       const ssidBytes = encoder.encode(ssid);
@@ -66,19 +71,17 @@
       const maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE);
       const limit = Math.min(maxTexture, gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0]);
       const count = passwords.length;
-      if (count > 32768) throw new RangeError('Размер пачки не должен превышать 32768');
       // Keep each draw within hardware limits; only final results cross to JS.
       if (count > limit) {
-        const result = [];
+        const mics = [];
         for (let offset = 0; offset < count; offset += limit) {
           const part = await this.derive(passwords.slice(offset, offset + limit), ssid, keyData, message);
-          for (const value of part) result.push(value);
+          mics.push(...part.mics);
         }
-        return result;
+        return { mics };
       }
       const blocks = Math.ceil((message.length + 9) / 64);
       if (blocks > maxTexture) throw new RangeError(`Сообщение не должно превышать ${maxTexture * 64 - 9} байт`);
-      if (!count) return [];
 
       // CPU prepares only the original inputs and SHA-1 padding, never intermediate keys.
       const ssidWords = new Uint32Array(32);
@@ -179,12 +182,12 @@
         gl.readPixels(0, 0, count, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, readback);
         const error = gl.getError();
         if (error !== gl.NO_ERROR || gl.isContextLost()) throw new Error(`Ошибка WebGL2: ${error}`);
-        return Array.from({ length: count }, (_, i) => {
+        return { mics: Array.from({ length: count }, (_, i) => {
           const mic = new Uint8Array(16);
           const view = new DataView(mic.buffer);
           for (let j = 0; j < 4; j++) view.setUint32(j * 4, readback[i * 4 + j], false);
-          return { mic };
-        });
+          return mic;
+        }) };
       } finally {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         for (const unit of [0, 1]) {
@@ -207,5 +210,4 @@
       this.gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
   }
-  globalThis.WPA2WebGL = WPA2WebGL;
-})();
+  export { WPA2WebGL };

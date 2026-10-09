@@ -28,15 +28,28 @@ async function calc_mic(kck, message) {
 }
 class WPA2WebCrypto {
   static async create() { return new WPA2WebCrypto(); }
-  async derive(passwords, ssid, keyData, message) {
-    if (!Array.isArray(passwords) || passwords.length < 1 || passwords.length > 32768) throw new RangeError('Batch: 1–32768');
-    const result = [];
-    for (const password of passwords) {
-      const pmk = await calc_pmk(password, ssid);
-      const ptk = await calc_ptk(pmk, keyData);
-      result.push({ mic: await calc_mic(ptk.slice(0, 16), message) });
-    }
-    return result;
+  constructor() {
+    this.maxBatch = 32768;
+    this.busy = false;
+    this.disposed = false;
   }
-  dispose() {}
+  async derive(passwords, ssid, keyData, message) {
+    if (this.disposed) throw new Error('WPA2WebCrypto уже освобождён');
+    if (this.busy) throw new Error('Дождитесь завершения предыдущего расчёта');
+    if (!Array.isArray(passwords) || passwords.length < 1 || passwords.length > this.maxBatch)
+      throw new RangeError(`Batch: 1–${this.maxBatch}`);
+    this.busy = true;
+    try {
+      const mics = [];
+      for (const password of passwords) {
+        const pmk = await calc_pmk(password, ssid);
+        const ptk = await calc_ptk(pmk, keyData);
+        mics.push(await calc_mic(ptk.slice(0, 16), message));
+      }
+      return { mics };
+    } finally { this.busy = false; }
+  }
+  dispose() { this.disposed = true; }
 }
+
+export { WPA2WebCrypto, calc_pmk, calc_ptk, calc_mic };

@@ -62,7 +62,13 @@ async function main() {
     expectedMic: 'f955d7dba6bd85b2560cf3f9d8a501e8',
   });
   const source = await readFile(new URL('../dist/wpa2-web-brute.full.js', import.meta.url), 'utf8');
-  const { default: puppeteer } = await import('puppeteer');
+  let puppeteer;
+  try {
+    ({ default: puppeteer } = await import('puppeteer'));
+  } catch (error) {
+    const hint = 'CLI requires optional peer dependency "puppeteer". Install it with `npm install puppeteer`.';
+    throw new Error(`${hint}${error?.message ? ` (${error.message})` : ''}`);
+  }
   // Loopback provides a secure context for both WebCrypto and WebGPU.
   const server = createServer((req, res) => {
     res.writeHead(req.url === '/' ? 200 : 404, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -91,13 +97,13 @@ async function main() {
             const started = performance.now();
             let instance;
             try {
-              instance = backend === 'webgl' ? new api.WPA2WebGL() :
-                await api[backend === 'webgpu' ? 'WPA2WebGPU' : 'WPA2WebCrypto'].create();
+              const Backend = { webcrypto: api.WPA2WebCrypto, webgl: api.WPA2WebGL, webgpu: api.WPA2WebGPU }[backend];
+              instance = await Backend.create();
               const mics = [];
-              const size = Math.min(batchSize, instance.maxBatch ?? batchSize);
+              const size = Math.min(batchSize, instance.maxBatch);
               for (let offset = 0; offset < input.passwords.length; offset += size) {
                 const result = await instance.derive(input.passwords.slice(offset, offset + size), input.ssid, bytes(input.keyData), bytes(input.message));
-                for (const mic of result.mics ?? result.map(item => item.mic))
+                for (const mic of result.mics)
                   mics.push(Array.from(mic, b => b.toString(16).padStart(2, '0')).join(''));
               }
               const matches = input.expectedMic === undefined ? undefined : mics.map(mic => mic === input.expectedMic);

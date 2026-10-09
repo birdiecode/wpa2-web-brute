@@ -65,13 +65,14 @@ async function run() {
     $('output').textContent = 'Инициализация…';
     await new Promise(r => setTimeout(r, 30));
     const init = performance.now();
-    backend = method === 'webgl' ? new api.WPA2WebGL() : await (method === 'webgpu' ? api.WPA2WebGPU : api.WPA2WebCrypto).create();
+    const Backend = { webcrypto: api.WPA2WebCrypto, webgl: api.WPA2WebGL, webgpu: api.WPA2WebGPU }[method];
+    backend = await Backend.create();
     const initMs = performance.now() - init;
     const passwords = Array(batch).fill($('password').value);
     const start = performance.now();
     const result = await backend.derive(passwords, $('ssid').value, keyData, message);
     const elapsed = performance.now() - start;
-    const mics = result.mics || result.map(r => r.mic);
+    const { mics } = result;
     if (mics.length !== batch) throw new Error('Неверное число результатов');
     const first = hex(mics[0]);
     if (!mics.every(m => hex(m) === (expected || first))) throw new Error('MIC не совпал: первый результат ' + first);

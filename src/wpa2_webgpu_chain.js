@@ -1,5 +1,7 @@
+import { WebGPUPMK } from './wpa2_webgpu_pmk.js';
+import { WebGPUPTK } from './wpa2_webgpu_ptk.js';
+import { WebGPUMIC } from './wpa2_webgpu_mic.js';
 // Three ordered GPU passes, one submission, one final MIC readback.
-(function () {
 'use strict';
 class WPA2WebGPU {
     static async create() {
@@ -151,5 +153,4 @@ class WPA2WebGPU {
         this.device.destroy();
     }
 }
-globalThis.WPA2WebGPU = WPA2WebGPU;
-})();
+export { WPA2WebGPU };

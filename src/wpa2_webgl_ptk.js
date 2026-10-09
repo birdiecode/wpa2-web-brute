@@ -2,7 +2,6 @@
 // keyData = min(AP, STA) || max(AP, STA) || min(ANonce, SNonce) || max(ANonce, SNonce).
 // Usage: const ptks = await new WebGL2PTK().derive([pmk], keyData);
 // One fragment per PMK. The context and shader names are private to this backend.
-(() => {
   const vertexSource = `#version 300 es
 void main() {
     vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
@@ -91,6 +90,7 @@ void main() {
       return { vertex: vertexSource, fragment: fragmentSource };
     }
     constructor() {
+      this.disposed = false;
       this.canvas = document.createElement('canvas');
       this.gl = this.canvas.getContext('webgl2', {
         antialias: false, depth: false, stencil: false,
@@ -129,6 +129,7 @@ void main() {
     // pmks: Uint8Array[32][]; keyData: Uint8Array[76]. Returns Uint8Array[64][].
     // Readback is synchronous, so awaiting this method does not move work off the UI thread.
     async derive(pmks, keyData) {
+      if (this.disposed) throw new Error('WebGL2PTK уже освобождён');
       if (!this.program) throw new Error('WebGL2PTK уже освобождён');
       const gl = this.gl;
       if (gl.isContextLost()) throw new Error('Контекст WebGL2 потерян');
@@ -226,9 +227,11 @@ void main() {
     }
 
     dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
       if (this.program) this.gl.deleteProgram(this.program);
       this.program = null;
+      this.gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
   }
-  globalThis.WebGL2PTK = WebGL2PTK;
-})();
+  export { WebGL2PTK };

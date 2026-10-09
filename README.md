@@ -2,9 +2,10 @@
 
 ## Node.js-пакет и сборка
 
-Node.js 20+. Сборка не требует сторонних npm-зависимостей:
+Node.js 20+. Сборка использует esbuild из devDependencies:
 
 ```bash
+npm ci
 npm run build
 npm test
 npm pack
@@ -18,6 +19,12 @@ npm pack
 проверяются все результаты. При изменении входов измените или очистите ожидаемый MIC.
 Размер батча выбирается из выпадающего списка: 1, 2, 4, …, 32768.
 Кнопка «Запустить тест» выполняет расчёт для выбранного размера.
+
+Исходники в `src/` — ES-модули с явными импортами и экспортами.
+Точки входа сборки находятся в `src/entries/`; UI и обработчики демо —
+в `demo/`. Модули `demo/webgpu-{pmk,ptk,mic}.js` предназначены для
+соответствующих отдельных форм и подключаются через `type="module"`.
+Сборщик обрабатывает граф импортов без обрезания исходников и подмены DOM.
 
 В `dist/` создаются четыре независимые библиотеки:
 
@@ -44,19 +51,33 @@ import { WPA2WebCrypto, calc_pmk } from 'wpa2-web-brute/webcrypto';
 const pmk = await calc_pmk('12345678', 'Test_WiFi');
 const backend = await WPA2WebCrypto.create();
 // keyData: Uint8Array(76), message: Uint8Array с обнулённым полем MIC.
-const results = await backend.derive(['12345678'], 'Test_WiFi', keyData, message);
-console.log(results[0].mic);
+const { mics } = await backend.derive(['12345678'], 'Test_WiFi', keyData, message);
+console.log(mics[0]);
 backend.dispose();
 ```
 
 Экспорты: `calc_pmk(password, ssid)`, `calc_ptk(pmk, keyData)`,
 `calc_mic(kck, message)`, `WPA2WebCrypto`; `WebGL2PMK`, `WebGL2PTK`,
 `WebGL2MIC`, `WPA2WebGL`; `WebGPUPMK`, `WebGPUPTK`, `WebGPUMIC`, `WPA2WebGPU`.
-WebGL создаётся через `new`, WebGPU — через `await Class.create()`.
-Отдельные WebGL-этапы используют `derive()`, WebGPU-этапы — `calculate()`.
-Полные цепочки используют `derive(passwords, ssid, keyData, message)`;
-WebCrypto/WebGL возвращают `[{mic}]`, WebGPU — `{mics: Uint8Array[]}`.
-После использования GPU вызывайте `dispose()` у экземпляра полной цепочки.
+Полные цепочки `WPA2WebCrypto`, `WPA2WebGL`, `WPA2WebGPU` имеют общий контракт:
+
+- `await Backend.create()` — готовый экземпляр.
+- `maxBatch` — максимальное число паролей в одном вызове.
+- `await derive(passwords, ssid, keyData, message)` — `{ mics: Uint8Array[] }`,
+  один 16-байтовый MIC на пароль, в порядке входных данных.
+- `dispose()` — освобождение экземпляра; повторный вызов безопасен.
+
+Пустые батчи и батчи больше `maxBatch` отклоняются. После `dispose()` новые
+вызовы `derive()` отклоняются. Освобождайте экземпляр в `finally`.
+Изменение API: прежний результат WebCrypto/WebGL `[{mic}]` заменён на `{mics}`;
+вместо `results[i].mic` используйте `result.mics[i]`.
+
+Низкоуровневые отдельные этапы сохраняют специализированный API:
+WebGL-этапы создаются через `new` и используют `derive()`,
+WebGPU-этапы — через `create()` и `calculate()`.
+Отдельный `WebGL2PMK` также требует `dispose()` (желательно в `finally`):
+метод освобождает программу и контекст, повторный вызов безопасен.
+Вызов `derive()` после освобождения завершается ошибкой.
 
 ## Структура
 
@@ -69,8 +90,18 @@ WebCrypto/WebGL возвращают `[{mic}]`, WebGPU — `{mics: Uint8Array[]}
 
 ## CLI через Puppeteer / Headless Chromium
 
+Puppeteer — опциональный peer dependency: библиотечные API WebCrypto, WebGL2 и
+WebGPU устанавливаются без тяжёлого браузерного пакета. Для CLI установите его явно:
+
+```bash
+npm install puppeteer
+```
+
+При запуске CLI без Puppeteer будет показана точная команда установки зависимости.
+
 ```bash
 npm install
+npm install puppeteer # требуется только для CLI
 npm run build
 npm run cli -- --backend all
 npm run cli -- --backend all --software
