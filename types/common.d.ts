@@ -24,7 +24,7 @@ export interface WPA2Chain {
   dispose(): void;
 }
 
-export interface BatchBackend<Result> {
-  calculate(...args: any[]): Promise<Result>;
+export interface BatchBackend<Args extends unknown[], Result> {
+  calculate(...args: Args): Promise<Result>;
   dispose(): void;
 }

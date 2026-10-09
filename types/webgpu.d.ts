@@ -4,7 +4,7 @@ export interface WebGPUMICOptions {
   lite?: boolean;
 }
 
-export interface WebGPUPMK extends BatchBackend<TimedPmksResult> {
+export interface WebGPUPMK extends BatchBackend<[passwords: string[], ssid: string], TimedPmksResult> {
   calculate(passwords: string[], ssid: string): Promise<TimedPmksResult>;
   dispose(): void;
 }
@@ -15,7 +15,7 @@ export const WebGPUPMK: {
   create(): Promise<WebGPUPMK>;
 };
 
-export interface WebGPUPTK extends BatchBackend<TimedPtksResult> {
+export interface WebGPUPTK extends BatchBackend<[pmks: Bytes[], keyData: Bytes], TimedPtksResult> {
   calculate(pmks: Bytes[], keyData: Bytes): Promise<TimedPtksResult>;
   dispose(): void;
 }
@@ -25,7 +25,12 @@ export const WebGPUPTK: {
   create(): Promise<WebGPUPTK>;
 };
 
-export class WebGPUMIC implements BatchBackend<TimedMicsResult> {
+export class WebGPUMIC implements BatchBackend<[
+  keys: Bytes[],
+  message: Bytes,
+  variant?: 'baseline' | 'scalar',
+  workgroupSize?: number,
+], TimedMicsResult> {
   static readonly ptkShader: string;
   readonly maxBatch: number;
   readonly groupSizes: number[];
