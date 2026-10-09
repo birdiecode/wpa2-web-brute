@@ -23,5 +23,9 @@ for (const variant of ['webcrypto', 'webgl', 'webgpu', 'full']) {
     });
   }
 }
+for (const variant of ['webcrypto', 'webgl', 'webgpu', 'full']) {
+  await copyFile(new URL(`types/${variant}.d.ts`, root), new URL(`dist/wpa2-web-brute.${variant}.d.ts`, root));
+}
+await copyFile(new URL('types/common.d.ts', root), new URL('dist/common.d.ts', root));
 await copyFile(new URL('demo/index.html', root), new URL('dist/index.html', root));
-console.log('Built webcrypto, webgl, webgpu, full (browser / ESM / CommonJS) and dist/index.html');
+console.log('Built webcrypto, webgl, webgpu, full (browser / ESM / CommonJS), declarations and dist/index.html');

@@ -5,24 +5,30 @@
   "type": "module",
   "main": "./dist/wpa2-web-brute.full.cjs",
   "module": "./dist/wpa2-web-brute.full.mjs",
+  "types": "./dist/wpa2-web-brute.full.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/wpa2-web-brute.full.d.ts",
       "import": "./dist/wpa2-web-brute.full.mjs",
       "require": "./dist/wpa2-web-brute.full.cjs"
     },
     "./full": {
+      "types": "./dist/wpa2-web-brute.full.d.ts",
       "import": "./dist/wpa2-web-brute.full.mjs",
       "require": "./dist/wpa2-web-brute.full.cjs"
     },
     "./webcrypto": {
+      "types": "./dist/wpa2-web-brute.webcrypto.d.ts",
       "import": "./dist/wpa2-web-brute.webcrypto.mjs",
       "require": "./dist/wpa2-web-brute.webcrypto.cjs"
     },
     "./webgl": {
+      "types": "./dist/wpa2-web-brute.webgl.d.ts",
       "import": "./dist/wpa2-web-brute.webgl.mjs",
       "require": "./dist/wpa2-web-brute.webgl.cjs"
     },
     "./webgpu": {
+      "types": "./dist/wpa2-web-brute.webgpu.d.ts",
       "import": "./dist/wpa2-web-brute.webgpu.mjs",
       "require": "./dist/wpa2-web-brute.webgpu.cjs"
     }
