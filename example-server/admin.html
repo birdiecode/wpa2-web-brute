@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Прогресс заданий</title>
+  <style>
+    body { max-width:960px; margin:36px auto; padding:0 20px; font:16px/1.5 system-ui; color:#18232e; }
+    a { color:#175cd3; }
+    section { margin:24px 0; padding:20px; border:1px solid #dbe2e9; border-radius:8px; }
+    h1,h2,p { margin-top:0; }
+    h2 { font-size:20px; }
+    .note { color:#52616f; font-size:14px; }
+    .progress-track { position:relative; height:30px; margin:12px 0; background:#e9edf2; border-radius:6px; overflow:hidden; }
+    .segment { position:absolute; top:0; bottom:0; }
+    .segment.completed { background:#168052; }
+    .segment.reserved { background:#175cd3; }
+    .legend { display:flex; flex-wrap:wrap; gap:18px; font-size:14px; }
+    .key { display:inline-block; width:12px; height:12px; margin-right:6px; border-radius:2px; }
+    .key.completed { background:#168052; } .key.reserved { background:#175cd3; } .key.free { background:#e9edf2; }
+    dl { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; }
+    dl div { padding:12px; background:#f1f4f7; border-radius:6px; }
+    dt { color:#52616f; font-size:14px; }
+    dd { margin:4px 0 0; font-size:22px; overflow-wrap:anywhere; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:10px 8px; border-bottom:1px solid #dbe2e9; text-align:left; overflow-wrap:anywhere; }
+    code { overflow-wrap:anywhere; }
+    #error { color:#b42318; }
+    button { padding:10px 16px; border:1px solid #b42318; border-radius:5px; background:white; color:#b42318; font:inherit; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:wait; }
+  </style>
+</head>
+<body>
+  <a href="/">Открыть обработчик</a>
+  <h1>Прогресс заданий</h1>
+  <button id="reset-button" type="button">Сбросить прогресс</button>
+  <p class="note">Сброс очищает обработанные интервалы, резервы и найденные пароли. Маска и параметры расчёта сохраняются.</p>
+  <p id="reset-status" role="status"></p>
+  <p>Маска: <code id="mask">—</code></p>
+  <p id="status" role="status">Загрузка статистики…</p>
+  <p id="error" role="alert" hidden></p>
+  <section>
+    <h2>Найденные пароли</h2>
+    <div id="found-passwords" role="status">Совпадений пока нет.</div>
+  </section>
+  <section>
+    <h2 id="progress-title">Прогресс обработки</h2>
+    <p id="progress-label">Загрузка…</p>
+    <div id="work-progress" class="progress-track" role="progressbar" aria-labelledby="progress-title" aria-describedby="progress-label" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="legend">
+      <span><i class="key completed"></i>Обработано</span>
+      <span><i class="key reserved"></i>В работе</span>
+      <span><i class="key free"></i>Свободно</span>
+    </div>
+    <p id="timeout" class="note"></p>
+  </section>
+  <dl>
+    <div><dt>Всего кандидатов</dt><dd id="total">—</dd></div>
+    <div><dt>Обработано + в работе</dt><dd id="issued">—</dd></div>
+    <div><dt>Обработано</dt><dd id="completed">—</dd></div>
+    <div><dt>В работе</dt><dd id="inProgress">—</dd></div>
+    <div><dt>Свободно</dt><dd id="remaining">—</dd></div>
+  </dl>
+  <section>
+    <h2>Зарезервированные интервалы</h2>
+    <table>
+      <thead><tr><th>Диапазон</th><th>Начало</th><th>Конец (не включая)</th><th>Осталось</th></tr></thead>
+      <tbody id="ranges"></tbody>
+    </table>
+  </section>
+  <p id="updated" class="note">Обновление каждые 2 секунды · GET /api/work</p>
+  <script>
+    const $ = id => document.getElementById(id);
+    const format = value => BigInt(value).toLocaleString('ru-RU');
+    async function refresh(schedule = true) {
+      try {
+        const response = await fetch('/api/work', { cache:'no-store', signal:AbortSignal.timeout(10000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const work = await response.json();
+        $('mask').textContent = work.mask;
+        for (const key of ['total', 'issued', 'completed', 'inProgress', 'remaining']) $(key).textContent = format(work[key]);
+        const track = $('work-progress'), total = BigInt(work.total);
+        const percent = value => total ? Number(BigInt(value) * 100000000n / total) / 1000000 : 0;
+        const segments = [];
+        for (const state of ['completed', 'reserved']) {
+          for (const interval of work.intervals[state]) {
+            const segment = document.createElement('span');
+            segment.className = `segment ${state}`;
+            segment.style.left = `${percent(interval.start)}%`;
+            segment.style.width = `${percent(BigInt(interval.end) - BigInt(interval.start))}%`;
+            segment.title = `${state === 'completed' ? 'Обработано' : 'В работе'}: [${interval.start}, ${interval.end})`;
+            segments.push(segment);
+          }
+        }
+        track.replaceChildren(...segments);
+        track.setAttribute('aria-valuenow', work.completedPercent);
+        const summary = `Обработано: ${format(work.completed)} (${work.completedPercent}%) · В работе: ${format(work.inProgress)} · Всего: ${format(work.total)}`;
+        track.setAttribute('aria-valuetext', summary);
+        $('progress-label').textContent = summary;
+        $('timeout').textContent = `Резерв снимается через ${work.timeoutMs / 1000} с без ответа. Освободившиеся интервалы выдаются повторно.`;
+        const found = work.foundPasswords ?? [];
+        const matches = found.map(match => {
+          const item = document.createElement('p');
+          const password = document.createElement('strong');
+          password.textContent = match.password;
+          item.append(password, ` · Индекс ${format(match.index)} · Диапазон ${match.range} [${match.interval.start}, ${match.interval.end})`);
+          return item;
+        });
+        $('found-passwords').replaceChildren(...(matches.length ? matches : [document.createTextNode('Совпадений пока нет.')]));
+        $('status').textContent = work.stopReason === 'password_found' ? 'Пароль найден. Выдача интервалов остановлена.' : work.done ? 'Все диапазоны обработаны.'
+          : BigInt(work.inProgress) > 0n ? 'Ожидаются результаты выданных диапазонов.' : 'Задание готово к выдаче.';
+        const rows = work.ranges.map(range => {
+          const row = document.createElement('tr');
+          for (const value of [range.range, range.start, range.end]) {
+            const cell = document.createElement('td'); cell.textContent = format(value); row.append(cell);
+          }
+          const lease = document.createElement('td');
+          lease.textContent = `${Math.max(0, Math.ceil((range.expiresAt - Date.now()) / 1000))} с`;
+          row.append(lease);
+          return row;
+        });
+        if (!rows.length) {
+          const row = document.createElement('tr'), cell = document.createElement('td');
+          cell.colSpan = 4; cell.textContent = 'Нет текущих диапазонов.'; row.append(cell); rows.push(row);
+        }
+        $('ranges').replaceChildren(...rows);
+        $('error').hidden = true;
+        $('updated').textContent = `Обновлено: ${new Date().toLocaleTimeString('ru-RU')} · каждые 2 секунды · GET /api/work`;
+      } catch (error) {
+        $('error').hidden = false;
+        $('error').textContent = `Не удалось обновить статистику: ${error.message}. Повторная попытка через 2 секунды.`;
+      } finally { if (schedule) setTimeout(refresh, 2000); }
+    }
+    $('reset-button').onclick = async () => {
+      $('reset-button').disabled = true;
+      $('reset-status').textContent = 'Сброс…';
+      try {
+        const response = await fetch('/api/reset', { method:'POST' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        $('reset-status').textContent = 'Прогресс сброшен. Выдача снова начинается с индекса 0.';
+        await refresh(false);
+      } catch (error) {
+        $('reset-status').textContent = `Не удалось сбросить прогресс: ${error.message}`;
+      } finally { $('reset-button').disabled = false; }
+    };
+    refresh();
+  </script>
+</body>
+</html>

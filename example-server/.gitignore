@@ -1,0 +1,4 @@
+node_modules/
+job.json
+job.json.tmp
+result.json

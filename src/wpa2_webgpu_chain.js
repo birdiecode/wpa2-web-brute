@@ -6,8 +6,10 @@ import { WebGPUMIC } from './wpa2_webgpu_mic.js';
 class WPA2WebGPU {
     static async create() {
         if (!navigator.gpu) throw new Error('WebGPU недоступен; используйте HTTPS или localhost');
-        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-        if (!adapter) throw new Error('WebGPU adapter не найден');
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
+            ?? await navigator.gpu.requestAdapter()
+            ?? await navigator.gpu.requestAdapter({ featureLevel: 'compatibility' });
+        if (!adapter) throw new Error('WebGPU: браузер не предоставил адаптер ни в обычном режиме, ни в Compatibility Mode. Проверьте Dawn Info и Log Messages в chrome://gpu.');
         const device = await adapter.requestDevice();
         let chain;
         try {

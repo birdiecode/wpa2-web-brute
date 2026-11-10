@@ -41,6 +41,8 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:server": "npm run build && npm ci --prefix example-server",
+    "start": "npm --prefix example-server start",
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit -p tests/types/tsconfig.json",
     "test:cli": "node --test tests/cli.test.mjs",

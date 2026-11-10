@@ -1,0 +1,16 @@
+{
+  "name": "wpa2-web-brute-example-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test intervals.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "rank-lib-js": "git+ssh://git@github.com/birdiecode/rank-lib-js.git#c5a1840e6a450eaf2f10fde1d77943c06b84fb67"
+  }
+}

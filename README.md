@@ -1,5 +1,19 @@
 # wpa2 web brute
 
+Пример сервера с автоматической выдачей заданий и админ-панелью:
+[example-server](example-server/README.md).
+
+Сборка и запуск сервера из корня проекта (после `npm ci`):
+
+```bash
+npm run build:server
+npm start
+```
+
+`build:server` собирает WPA2-библиотеку и устанавливает Git-зависимости
+сервера. Страница обработки — <http://127.0.0.1:3000/>, админ-панель —
+<http://127.0.0.1:3000/admin>.
+
 ## Node.js-пакет и сборка
 
 Node.js 20+. Сборка использует esbuild из devDependencies:
